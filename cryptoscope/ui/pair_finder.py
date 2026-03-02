@@ -22,6 +22,7 @@ PAIRS_KEYS: list[tuple[str, str]] = [
     ("/", "search"),
     ("a", "add"),
     ("d", "remove"),
+    ("F7", "settings"),
 ]
 
 

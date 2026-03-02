@@ -41,6 +41,7 @@ class ChartView:
         ("i", "RSI"),
         ("m", "MACD"),
         ("o", "book"),
+        ("F7", "settings"),
     ]
 
     def __init__(self) -> None:

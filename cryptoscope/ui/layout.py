@@ -25,6 +25,7 @@ class TerminalLayout:
         ("↑↓", "nav"),
         ("Enter", "chart"),
         ("r", "refresh"),
+        ("F7", "settings"),
         ("q", "quit"),
     ]
 

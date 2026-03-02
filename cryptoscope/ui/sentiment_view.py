@@ -25,6 +25,7 @@ class SentimentView:
         ("Esc", "back"),
         ("↑↓", "scroll"),
         ("r", "refresh"),
+        ("F7", "settings"),
         ("q", "quit"),
     ]
 
