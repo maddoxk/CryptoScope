@@ -12,14 +12,9 @@ from rich.text import Text
 
 from cryptoscope.charting.engine import ChartConfig, Timeframe, render_candlestick_chart
 from cryptoscope.charting.indicators import compute_all_indicators
-from cryptoscope.models.price import OHLCV, Ticker
-from cryptoscope.ui.panels import VIEW_CHART, build_footer, build_header
-from cryptoscope.ui.themes import (
-    BG_SURFACE,
-    BORDER_ACTIVE,
-    BORDER_DIM,
-    BOX_DEFAULT,
-)
+from cryptoscope.models.price import OHLCV, OrderBook, Ticker
+from cryptoscope.ui.panels import VIEW_CHART, build_footer, build_header, build_order_book_panel
+import cryptoscope.ui.themes as _themes
 from cryptoscope.utils.formatting import color_percent, format_large_number, format_price
 
 
@@ -45,6 +40,7 @@ class ChartView:
         ("b", "BB"),
         ("i", "RSI"),
         ("m", "MACD"),
+        ("o", "book"),
     ]
 
     def __init__(self) -> None:
@@ -58,6 +54,10 @@ class ChartView:
         self.zoom_level: int = 0
         self.last_update = None
         self.status: str = "OK"
+        # Order book
+        self.show_order_book: bool = False
+        self.order_book: OrderBook | None = None
+        self.binance_symbol: str = ""
 
     @property
     def timeframe(self) -> Timeframe:
@@ -103,7 +103,8 @@ class ChartView:
         elif name == "bollinger":
             cfg.show_bollinger = not cfg.show_bollinger
         elif name == "sma":
-            cfg.show_sma = [] if cfg.show_sma else [20, 50]
+            # Toggle the dedicated SMA subplot; keep the period list intact
+            cfg.show_sma_panel = not cfg.show_sma_panel
         elif name == "ema":
             cfg.show_ema = [] if cfg.show_ema else [20, 50]
 
@@ -127,8 +128,9 @@ class ChartView:
         term_w, term_h = _term_size()
         sidebar_w = self._sidebar_width()
 
-        # Chart panel gets: total width - sidebar width
-        chart_panel_w = term_w - sidebar_w
+        # Chart panel gets: total width - sidebar width - order book (if visible)
+        orderbook_w = 32 if (self.show_order_book and self.order_book) else 0
+        chart_panel_w = term_w - sidebar_w - orderbook_w
         # Inside the panel: subtract border (2) + padding (2)
         chart_w = chart_panel_w - 4
 
@@ -154,23 +156,32 @@ class ChartView:
         # Breadcrumb bar
         layout["breadcrumb"].update(self._build_breadcrumb())
 
-        # Body: chart + stats sidebar
+        # Body: chart + (optional order book) + stats sidebar
         sidebar_w = self._sidebar_width()
         body = Layout()
-        body.split_row(
-            Layout(name="chart", minimum_size=40),
-            Layout(name="sidebar", size=sidebar_w),
-        )
 
         chart_text = self._render_chart()
-        body["chart"].update(
-            Panel(
-                chart_text,
-                box=BOX_DEFAULT,
-                border_style=BORDER_DIM,
-                title=f"[bold grey70]{self.timeframe.label}[/bold grey70]",
-            )
+        chart_panel = Panel(
+            chart_text,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
+            title=f"[bold grey70]{self.timeframe.label}[/bold grey70]",
         )
+
+        if self.show_order_book and self.order_book:
+            body.split_row(
+                Layout(name="chart", minimum_size=40),
+                Layout(name="orderbook", size=32),
+                Layout(name="sidebar", size=sidebar_w),
+            )
+            body["orderbook"].update(build_order_book_panel(self.order_book))
+        else:
+            body.split_row(
+                Layout(name="chart", minimum_size=40),
+                Layout(name="sidebar", size=sidebar_w),
+            )
+
+        body["chart"].update(chart_panel)
         body["sidebar"].update(self._build_sidebar())
         layout["chart_body"].update(body)
 
@@ -319,7 +330,7 @@ class ChartView:
         toggles = Text()
         cfg = self.chart_config
         for name, active in [
-            ("SMA", bool(cfg.show_sma)),
+            ("SMA", cfg.show_sma_panel and bool(cfg.show_sma)),
             ("EMA", bool(cfg.show_ema)),
             ("BB", cfg.show_bollinger),
             ("RSI", cfg.show_rsi),
@@ -343,7 +354,7 @@ class ChartView:
 
         return Panel(
             sidebar,
-            box=BOX_DEFAULT,
-            border_style=BORDER_DIM,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
             title="[bold grey70]Details[/bold grey70]",
         )

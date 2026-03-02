@@ -11,8 +11,10 @@ from enum import Enum, auto
 from rich.console import Console
 from rich.live import Live
 
-from cryptoscope.config import ensure_config
+from cryptoscope.config import ensure_config, save_config
+from cryptoscope.data.binance import BinanceProvider
 from cryptoscope.data.coingecko import CoinGeckoProvider
+from cryptoscope.data.symbol_map import coingecko_to_binance
 from cryptoscope.data.cryptopanic import CryptoPanicProvider
 from cryptoscope.data.fear_greed import FearGreedProvider
 from cryptoscope.data.lunarcrush import LunarCrushProvider
@@ -22,8 +24,10 @@ from cryptoscope.db import Database
 from cryptoscope.ui.chart_view import ChartView
 from cryptoscope.ui.input import TerminalInput
 from cryptoscope.ui.layout import TerminalLayout
+from cryptoscope.ui.pair_finder import PairFinderView
 from cryptoscope.ui.sentiment_view import SentimentView
-from cryptoscope.ui.themes import CRYPTOSCOPE_THEME
+from cryptoscope.ui.settings_view import SettingsView
+from cryptoscope.ui.themes import CRYPTOSCOPE_THEME, apply_theme
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,8 @@ class ViewMode(Enum):
     WATCHLIST = auto()
     CHART = auto()
     SENTIMENT = auto()
+    PAIRS = auto()
+    SETTINGS = auto()
 
 
 class CryptoScopeApp:
@@ -39,11 +45,18 @@ class CryptoScopeApp:
 
     def __init__(self) -> None:
         self.config = ensure_config()
-        self.console = Console(theme=CRYPTOSCOPE_THEME)
+        # Apply saved theme
+        theme_name = self.config["general"].get("theme", "default")
+        theme = apply_theme(theme_name)
+        self.console = Console(theme=theme)
         self.layout = TerminalLayout()
         self.chart_view = ChartView()
         self.sentiment_view = SentimentView()
+        self.pair_finder = PairFinderView()
+        self.settings_view = SettingsView()
+        self.settings_view.on_theme_change = self._apply_theme
         self.view_mode = ViewMode.WATCHLIST
+        self._previous_view = ViewMode.WATCHLIST
         self._running = False
         self._needs_render = asyncio.Event()
         self._selected_row = 0
@@ -61,6 +74,7 @@ class CryptoScopeApp:
         self.lunarcrush = LunarCrushProvider(api_key=api_keys.get("lunarcrush", ""))
         self.reddit = RedditProvider()
         self.trends = GoogleTrendsProvider()
+        self.binance = BinanceProvider()
 
     # --- Data fetching ---
 
@@ -88,12 +102,36 @@ class CryptoScopeApp:
             self.layout.status = "ERROR"
 
     async def _fetch_chart_data(self, coin_id: str) -> None:
-        """Fetch OHLCV data for the chart view."""
+        """Fetch OHLCV data for the chart view.
+
+        Prefers Binance klines (which include real volume data) and falls
+        back to CoinGecko OHLCV when no Binance symbol mapping exists.
+        """
         try:
             tf = self.chart_view.timeframe
-            candles = await self.coingecko.fetch_ohlcv(coin_id, days=tf.coingecko_days)
             ticker = next((t for t in self.layout.tickers if t.id == coin_id), None)
-            if ticker and candles:
+            if not ticker:
+                return
+
+            binance_symbol = coingecko_to_binance(coin_id, ticker.symbol)
+            candles = None
+
+            if binance_symbol:
+                try:
+                    candles = await self.binance.fetch_klines(
+                        binance_symbol,
+                        interval=tf.binance_interval,
+                        limit=200,
+                    )
+                    self.chart_view.binance_symbol = binance_symbol
+                except Exception as e:
+                    logger.warning("Binance klines failed for %s, falling back to CoinGecko: %s", binance_symbol, e)
+
+            if not candles:
+                candles = await self.coingecko.fetch_ohlcv(coin_id, days=tf.coingecko_days)
+                self.chart_view.binance_symbol = binance_symbol or ""
+
+            if candles:
                 self.chart_view.set_data(ticker, candles)
                 self.chart_view.last_update = self.layout.last_update
         except Exception as e:
@@ -155,6 +193,13 @@ class CryptoScopeApp:
         )
         sv.last_update = datetime.now()
 
+    # --- Theme ---
+
+    def _apply_theme(self, theme_name: str) -> None:
+        """Live-apply a new theme. Updates console and module-level constants."""
+        new_theme = apply_theme(theme_name)
+        self.console.push_theme(new_theme)
+
     # --- Rendering ---
 
     def _current_renderable(self):
@@ -163,6 +208,10 @@ class CryptoScopeApp:
             return self.chart_view.build()
         elif self.view_mode == ViewMode.SENTIMENT:
             return self.sentiment_view.build()
+        elif self.view_mode == ViewMode.PAIRS:
+            return self.pair_finder.build()
+        elif self.view_mode == ViewMode.SETTINGS:
+            return self.settings_view.build()
         return self.layout.build(selected_row=self._selected_row)
 
     def _request_render(self) -> None:
@@ -195,8 +244,18 @@ class CryptoScopeApp:
         interval = self.config["general"].get("refresh_interval", 10)
         while self._running:
             try:
-                if self.view_mode == ViewMode.WATCHLIST:
+                if self.view_mode in (ViewMode.SETTINGS, ViewMode.PAIRS):
+                    pass  # Skip data fetch while in settings or pair finder
+                elif self.view_mode == ViewMode.WATCHLIST:
                     await self._fetch_watchlist()
+                elif self.view_mode == ViewMode.CHART:
+                    # Refresh order book if visible
+                    cv = self.chart_view
+                    if cv.show_order_book and cv.binance_symbol:
+                        try:
+                            cv.order_book = await self.binance.fetch_order_book(cv.binance_symbol)
+                        except Exception as e:
+                            logger.warning("Order book refresh failed: %s", e)
                 elif self.view_mode == ViewMode.SENTIMENT:
                     await self._fetch_sentiment_data()
                 self._request_render()
@@ -217,6 +276,16 @@ class CryptoScopeApp:
 
     async def _handle_key(self, key: str) -> None:
         """Process a keypress based on current view."""
+        # In settings edit mode, route all keys to settings (including q)
+        if self.view_mode == ViewMode.SETTINGS and self.settings_view.editing:
+            await self._handle_settings_key(key)
+            return
+
+        # In pair finder search mode, route all keys (including q) to pair finder
+        if self.view_mode == ViewMode.PAIRS and self.pair_finder.searching:
+            await self._handle_pairs_key(key)
+            return
+
         if key in ("q", "Q"):
             self._running = False
             return
@@ -230,8 +299,26 @@ class CryptoScopeApp:
         if key == "F2":
             if self.view_mode != ViewMode.SENTIMENT:
                 self.view_mode = ViewMode.SENTIMENT
-                # Kick off a fetch in the background
                 asyncio.create_task(self._fetch_and_render_sentiment())
+            return
+        if key == "F3":
+            if self.view_mode != ViewMode.PAIRS:
+                self._previous_view = self.view_mode
+                self.view_mode = ViewMode.PAIRS
+                self.pair_finder.tickers = self.layout.tickers
+                self.pair_finder.watchlist_coins = list(
+                    self.config["watchlist"].get("coins", [])
+                )
+                asyncio.create_task(self._fetch_and_render_pairs())
+            return
+        if key == "F7":
+            if self.view_mode != ViewMode.SETTINGS:
+                self._previous_view = self.view_mode
+                self.view_mode = ViewMode.SETTINGS
+                self.settings_view.load(self.config)
+                self.settings_view.tickers = self.layout.tickers
+                self.settings_view.last_update = self.layout.last_update
+                self._request_render()
             return
 
         if self.view_mode == ViewMode.WATCHLIST:
@@ -240,11 +327,69 @@ class CryptoScopeApp:
             await self._handle_chart_key(key)
         elif self.view_mode == ViewMode.SENTIMENT:
             await self._handle_sentiment_key(key)
+        elif self.view_mode == ViewMode.PAIRS:
+            await self._handle_pairs_key(key)
+        elif self.view_mode == ViewMode.SETTINGS:
+            await self._handle_settings_key(key)
 
     async def _fetch_and_render_sentiment(self) -> None:
         """Fetch sentiment data then trigger a render."""
         await self._fetch_sentiment_data()
         self._request_render()
+
+    async def _fetch_and_render_pairs(self) -> None:
+        """Ensure coin list is loaded, then fetch first page."""
+        await self._fetch_coin_list()
+        await self._fetch_pairs_page()
+        self._request_render()
+
+    async def _fetch_coin_list(self) -> None:
+        """Fetch the full CoinGecko coin index, using 24h DB cache."""
+        pf = self.pair_finder
+        try:
+            cached = await self.db.cache_get("coingecko_coin_list")
+            if cached:
+                pf.coin_list = cached
+            else:
+                coin_list = await self.coingecko.fetch_coin_list()
+                pf.coin_list = coin_list
+                await self.db.cache_set("coingecko_coin_list", coin_list, ttl_seconds=86400)
+
+            total = len(pf.coin_list)
+            pf.total_coins = total
+            pf.total_pages = max(1, (total + pf.per_page - 1) // pf.per_page)
+        except Exception as e:
+            logger.error("Failed to fetch coin list: %s", e)
+            pf.status = "ERROR"
+
+    async def _fetch_pairs_page(self) -> None:
+        """Fetch market data for the current page (browse or search mode)."""
+        pf = self.pair_finder
+        try:
+            if pf.search_query and pf.search_results:
+                # Search mode: get market data for matching IDs
+                result_ids = [c["id"] for c in pf.search_results]
+                # Paginate the search results client-side
+                start = (pf.current_page - 1) * pf.per_page
+                page_ids = result_ids[start:start + pf.per_page]
+                tickers = await self.coingecko.fetch_coins_by_ids(page_ids)
+                pf.page_tickers = tickers
+                total = len(result_ids)
+                pf.total_coins = total
+                pf.total_pages = max(1, (total + pf.per_page - 1) // pf.per_page)
+            else:
+                # Browse mode: paginated market data by market cap
+                tickers = await self.coingecko.fetch_market_page(
+                    page=pf.current_page, per_page=pf.per_page
+                )
+                pf.page_tickers = tickers
+
+            pf.selected_row = min(pf.selected_row, max(0, len(pf.page_tickers) - 1))
+            pf.status = "OK"
+            self._request_render()
+        except Exception as e:
+            logger.error("Failed to fetch pairs page: %s", e)
+            pf.status = "ERROR"
 
     async def _handle_watchlist_key(self, key: str) -> None:
         tickers = self.layout.tickers
@@ -294,6 +439,13 @@ class CryptoScopeApp:
             cv.toggle_indicator("rsi")
         elif key in ("m", "M"):
             cv.toggle_indicator("macd")
+        elif key in ("o", "O"):
+            cv.show_order_book = not cv.show_order_book
+            if cv.show_order_book and cv.binance_symbol:
+                try:
+                    cv.order_book = await self.binance.fetch_order_book(cv.binance_symbol)
+                except Exception as e:
+                    logger.warning("Order book fetch failed: %s", e)
 
         if needs_data and cv.coin_id:
             await self._fetch_chart_data(cv.coin_id)
@@ -316,6 +468,49 @@ class CryptoScopeApp:
         elif key == "1":
             self.view_mode = ViewMode.WATCHLIST
             self._request_render()
+
+    async def _handle_pairs_key(self, key: str) -> None:
+        pf = self.pair_finder
+        action = pf.handle_key(key)
+        if action == "exit":
+            self.view_mode = self._previous_view
+        elif action == "fetch_page":
+            asyncio.create_task(self._fetch_pairs_page())
+        elif action == "fetch_search":
+            asyncio.create_task(self._fetch_pairs_page())
+        elif action == "add":
+            coin = pf.selected_coin
+            if coin:
+                watchlist = self.config["watchlist"].get("coins", [])
+                if coin.id not in watchlist:
+                    watchlist.append(coin.id)
+                    self.config["watchlist"]["coins"] = watchlist
+                    save_config(self.config)
+                    pf.watchlist_coins = list(watchlist)
+                    pf.flash(f"Added {coin.symbol} to watchlist")
+                else:
+                    pf.flash(f"{coin.symbol} already in watchlist")
+        elif action == "remove":
+            coin = pf.selected_coin
+            if coin:
+                watchlist = self.config["watchlist"].get("coins", [])
+                if coin.id in watchlist:
+                    watchlist.remove(coin.id)
+                    self.config["watchlist"]["coins"] = watchlist
+                    save_config(self.config)
+                    pf.watchlist_coins = list(watchlist)
+                    pf.flash(f"Removed {coin.symbol} from watchlist")
+                else:
+                    pf.flash(f"{coin.symbol} not in watchlist")
+        self._request_render()
+
+    async def _handle_settings_key(self, key: str) -> None:
+        result = self.settings_view.handle_key(key)
+        if result == "exit":
+            # Apply config changes back to the running app
+            self.config = self.settings_view.config
+            self.view_mode = self._previous_view
+        self._request_render()
 
     # --- Lifecycle ---
 
@@ -354,6 +549,7 @@ class CryptoScopeApp:
                     await self.fear_greed.close()
                     await self.cryptopanic.close()
                     await self.lunarcrush.close()
+                    await self.binance.close()
                     await self.reddit.close()
                     await self.db.close()
         finally:

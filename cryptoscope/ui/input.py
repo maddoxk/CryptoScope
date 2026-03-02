@@ -65,13 +65,20 @@ class TerminalInput:
         return os.read(self._fd, 1).decode("utf-8", errors="replace")
 
     def _read_escape_tail(self) -> str:
-        """Read the tail of an escape sequence with a short timeout."""
+        """Read the tail of an escape sequence with a short timeout.
+
+        Handles two sequence families:
+        - CSI sequences: ESC [ ... letter  (arrows, Fn via xterm/VT220)
+        - SS3 sequences: ESC O letter      (F1-F4 in VT100/many terminals)
+        """
         buf = ""
         while select.select([self._fd], [], [], 0.03)[0]:
             byte = os.read(self._fd, 1).decode("utf-8", errors="replace")
             buf += byte
-            # Stop at known sequence terminators
             if byte.isalpha() or byte == "~":
+                # SS3 prefix: ESC O — need one more byte for the actual key
+                if buf == "O":
+                    continue
                 break
         return buf
 
@@ -93,5 +100,6 @@ class TerminalInput:
             "[14~": "F4",
             "[15~": "F5",
             "[17~": "F6",
+            "[18~": "F7",
         }
         return mapping.get(seq, "ESCAPE")

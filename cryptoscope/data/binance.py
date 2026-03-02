@@ -11,7 +11,7 @@ from typing import Any, Callable
 import websockets
 
 from cryptoscope.data.base import DataProvider
-from cryptoscope.models.price import OHLCV, Ticker
+from cryptoscope.models.price import OHLCV, OrderBook, OrderBookEntry, Ticker
 
 logger = logging.getLogger(__name__)
 
@@ -76,11 +76,16 @@ class BinanceProvider(DataProvider):
             for k in data
         ]
 
-    async def fetch_order_book(self, symbol: str, limit: int = 20) -> dict[str, Any]:
-        """Fetch order book depth."""
-        return await self._get(
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> OrderBook:
+        """Fetch order book depth and return an OrderBook model."""
+        data = await self._get(
             "/depth",
             params={"symbol": symbol.upper(), "limit": limit},
+        )
+        return OrderBook(
+            symbol=symbol.upper(),
+            bids=[OrderBookEntry(price=float(b[0]), quantity=float(b[1])) for b in data.get("bids", [])],
+            asks=[OrderBookEntry(price=float(a[0]), quantity=float(a[1])) for a in data.get("asks", [])],
         )
 
     async def start_price_stream(

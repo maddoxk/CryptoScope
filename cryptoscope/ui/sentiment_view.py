@@ -15,7 +15,7 @@ from cryptoscope.models.sentiment import (
     TrendingTopic,
 )
 from cryptoscope.ui.panels import VIEW_SENTIMENT, build_footer, build_header
-from cryptoscope.ui.themes import BORDER_DIM, BOX_DEFAULT
+import cryptoscope.ui.themes as _themes
 
 
 class SentimentView:
@@ -104,8 +104,8 @@ class SentimentView:
             return Panel(
                 Text("Unavailable", style="grey42", justify="center"),
                 title="[bold grey70]Fear & Greed[/bold grey70]",
-                box=BOX_DEFAULT,
-                border_style=BORDER_DIM,
+                box=_themes.BOX_DEFAULT,
+                border_style=_themes.BORDER_DIM,
             )
 
         content = Text(justify="center")
@@ -144,8 +144,8 @@ class SentimentView:
         return Panel(
             content,
             title="[bold grey70]Fear & Greed[/bold grey70]",
-            box=BOX_DEFAULT,
-            border_style=BORDER_DIM,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
         )
 
     def _build_social_panel(self) -> Panel:
@@ -206,8 +206,8 @@ class SentimentView:
         return Panel(
             inner,
             title="[bold grey70]Social Buzz[/bold grey70]",
-            box=BOX_DEFAULT,
-            border_style=BORDER_DIM,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
         )
 
     def _build_trending_panel(self) -> Panel:
@@ -220,8 +220,8 @@ class SentimentView:
             return Panel(
                 Text("No trending data", style="grey42", justify="center"),
                 title="[bold grey70]Trending[/bold grey70]",
-                box=BOX_DEFAULT,
-                border_style=BORDER_DIM,
+                box=_themes.BOX_DEFAULT,
+                border_style=_themes.BORDER_DIM,
             )
 
         text = Text()
@@ -237,8 +237,8 @@ class SentimentView:
         return Panel(
             text,
             title="[bold grey70]Trending[/bold grey70]",
-            box=BOX_DEFAULT,
-            border_style=BORDER_DIM,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
         )
 
     def _build_news_panel(self) -> Panel:
@@ -251,8 +251,8 @@ class SentimentView:
                     justify="center",
                 ),
                 title="[bold grey70]News Feed[/bold grey70]",
-                box=BOX_DEFAULT,
-                border_style=BORDER_DIM,
+                box=_themes.BOX_DEFAULT,
+                border_style=_themes.BORDER_DIM,
             )
 
         text = Text()
@@ -289,6 +289,6 @@ class SentimentView:
         return Panel(
             text,
             title="[bold grey70]News Feed[/bold grey70]",
-            box=BOX_DEFAULT,
-            border_style=BORDER_DIM,
+            box=_themes.BOX_DEFAULT,
+            border_style=_themes.BORDER_DIM,
         )

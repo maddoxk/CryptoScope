@@ -10,6 +10,29 @@ from rich.text import Text
 
 from cryptoscope.models.price import OHLCV
 
+# ── Indicator line colors ──────────────────────────────────────────
+# Muted palette that contrasts with candlestick green/red without competing.
+
+SMA_COLORS: dict[int, str] = {
+    20: "cyan",
+    50: "orange",
+    100: "magenta",
+    200: "blue+",
+}
+
+EMA_COLORS: dict[int, str] = {
+    20: "green+",
+    50: "yellow",
+    100: "magenta+",
+    200: "blue",
+}
+
+BB_COLOR = "gray+"
+DEFAULT_INDICATOR_COLOR = "gray+"
+
+# Braille marker gives the thinnest possible line in plotext.
+_MARKER = "braille"
+
 
 class Timeframe(Enum):
     """Chart timeframes."""
@@ -46,6 +69,7 @@ class ChartConfig:
     show_sma: list[int] = field(default_factory=lambda: [20, 50])
     show_ema: list[int] = field(default_factory=list)
     show_bollinger: bool = False
+    show_sma_panel: bool = True   # dedicated SMA subplot below volume
     show_rsi: bool = False
     show_macd: bool = False
 
@@ -77,9 +101,11 @@ def render_candlestick_chart(
     n_subplots = 1  # price always
     if config.show_volume:
         n_subplots += 1
+    if config.show_sma_panel and (config.show_sma or config.show_ema):
+        n_subplots += 1
     if config.show_rsi and "rsi" in indicators:
         n_subplots += 1
-    if config.show_macd and "macd" in indicators:
+    if config.show_macd and "macd_line" in indicators:
         n_subplots += 1
 
     plt.clear_figure()
@@ -101,49 +127,68 @@ def render_candlestick_chart(
     closes = [c.close for c in candles]
 
     plt.date_form("m/d H:M")
-    plt.candlestick(dates, {"Open": opens, "Close": closes, "High": highs, "Low": lows})
-    plt.title(title or "Price Chart")
 
-    # Overlay SMA lines
-    for period in config.show_sma:
-        key = f"sma_{period}"
-        if key in indicators:
-            vals = indicators[key]
-            valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
-            if valid:
-                d, v = zip(*valid)
-                plt.plot(list(d), list(v), label=f"SMA{period}")
-
-    # Overlay EMA lines
-    for period in config.show_ema:
-        key = f"ema_{period}"
-        if key in indicators:
-            vals = indicators[key]
-            valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
-            if valid:
-                d, v = zip(*valid)
-                plt.plot(list(d), list(v), label=f"EMA{period}")
-
-    # Bollinger Bands
+    # Bollinger Bands overlaid on price chart (price-scale, no overlap issue)
     if config.show_bollinger and "bb_upper" in indicators:
         for band_key, label in [("bb_upper", "BB Upper"), ("bb_lower", "BB Lower")]:
             vals = indicators[band_key]
             valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
             if valid:
                 d, v = zip(*valid)
-                plt.plot(list(d), list(v), label=label)
+                plt.plot(list(d), list(v), label=label, color=BB_COLOR, marker=_MARKER)
+
+    # Candlesticks drawn after BB so candle bodies remain visible
+    plt.candlestick(dates, {"Open": opens, "Close": closes, "High": highs, "Low": lows})
+    plt.title(title or "Price Chart")
 
     # --- Volume subplot ---
     if config.show_volume:
         subplot_idx += 1
         plt.subplot(subplot_idx, 1)
         volumes = [c.volume for c in candles]
-        colors = [
-            "green" if c.close >= c.open else "red" for c in candles
-        ]
+        colors = ["green" if c.close >= c.open else "red" for c in candles]
         plt.bar(dates, volumes, color=colors)
         plt.title("Volume")
         plt.date_form("m/d H:M")
+
+    # --- SMA/EMA subplot ---
+    if config.show_sma_panel and (config.show_sma or config.show_ema):
+        subplot_idx += 1
+        plt.subplot(subplot_idx, 1)
+        plt.date_form("m/d H:M")
+        has_data = False
+        for period in config.show_sma:
+            key = f"sma_{period}"
+            if key in indicators:
+                vals = indicators[key]
+                valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
+                if valid:
+                    d, v = zip(*valid)
+                    plt.plot(
+                        list(d), list(v),
+                        label=f"SMA {period}",
+                        color=SMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
+                        marker=_MARKER,
+                    )
+                    has_data = True
+        for period in config.show_ema:
+            key = f"ema_{period}"
+            if key in indicators:
+                vals = indicators[key]
+                valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
+                if valid:
+                    d, v = zip(*valid)
+                    plt.plot(
+                        list(d), list(v),
+                        label=f"EMA {period}",
+                        color=EMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
+                        marker=_MARKER,
+                    )
+                    has_data = True
+        sma_label = "/".join(
+            [f"SMA{p}" for p in config.show_sma] + [f"EMA{p}" for p in config.show_ema]
+        )
+        plt.title(sma_label if has_data else "SMA")
 
     # --- RSI subplot ---
     if config.show_rsi and "rsi" in indicators:

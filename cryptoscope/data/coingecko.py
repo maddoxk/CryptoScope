@@ -82,6 +82,50 @@ class CoinGeckoProvider(DataProvider):
             for candle in data
         ]
 
+    async def fetch_coin_list(self) -> list[dict]:
+        """Fetch full coin index — id/symbol/name for every coin CoinGecko tracks.
+
+        Returns a list of dicts: [{id, symbol, name}, ...].
+        Callers should cache this — it rarely changes.
+        """
+        return await self._get(
+            "/coins/list",
+            params={"include_platform": "false"},
+        )
+
+    async def fetch_market_page(self, page: int = 1, per_page: int = 50) -> list[Ticker]:
+        """Fetch a page of coins sorted by market cap."""
+        data = await self._get(
+            "/coins/markets",
+            params={
+                "vs_currency": self.currency,
+                "order": "market_cap_desc",
+                "per_page": per_page,
+                "page": page,
+                "sparkline": "false",
+                "price_change_percentage": "1h,24h,7d",
+            },
+        )
+        return [self._parse_ticker(item) for item in data]
+
+    async def fetch_coins_by_ids(self, coin_ids: list[str]) -> list[Ticker]:
+        """Fetch market data for an explicit list of coin IDs (used for search results)."""
+        if not coin_ids:
+            return []
+        data = await self._get(
+            "/coins/markets",
+            params={
+                "vs_currency": self.currency,
+                "ids": ",".join(coin_ids[:250]),
+                "order": "market_cap_desc",
+                "per_page": 250,
+                "page": 1,
+                "sparkline": "false",
+                "price_change_percentage": "1h,24h,7d",
+            },
+        )
+        return [self._parse_ticker(item) for item in data]
+
     async def fetch_coin_detail(self, coin_id: str) -> dict[str, Any]:
         """Fetch detailed info for a single coin."""
         return await self._get(

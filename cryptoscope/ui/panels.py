@@ -4,19 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from rich import box
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from cryptoscope.models.price import Ticker
-from cryptoscope.ui.themes import (
-    BG_SELECTED,
-    BG_SURFACE,
-    BORDER_DIM,
-    BOX_DEFAULT,
-    BOX_TABLE,
-)
+from cryptoscope.models.price import OrderBook, Ticker
+import cryptoscope.ui.themes as _themes
 from cryptoscope.utils.formatting import (
     color_percent,
     format_large_number,
@@ -53,7 +46,7 @@ def _sparkline(values: list[float], width: int = 8) -> Text:
 
 
 def _volume_bar(volume: float, max_volume: float, width: int = 6) -> Text:
-    """Render a mini volume bar — filled in cornflower_blue, empty in grey19."""
+    """Render a mini volume bar — filled with accent color, empty in grey19."""
     if max_volume <= 0:
         return Text("░" * width, style="grey19")
 
@@ -61,7 +54,7 @@ def _volume_bar(volume: float, max_volume: float, width: int = 6) -> Text:
     filled = max(0, min(width, filled))
 
     bar = Text()
-    bar.append("█" * filled, style="cornflower_blue")
+    bar.append("█" * filled, style=_themes.BORDER_ACTIVE)
     bar.append("░" * (width - filled), style="grey19")
     return bar
 
@@ -70,27 +63,21 @@ def _volume_bar(volume: float, max_volume: float, width: int = 6) -> Text:
 
 
 def build_header(tickers: list[Ticker] | None = None) -> Panel:
-    """Build the top header bar with brand, ticker tape, and clock.
-
-    Accepts the full ticker list and shows the top 5 coins as a scrolling
-    tape with price + 24h change.
-    """
+    """Build the top header bar with brand, ticker tape, and clock."""
     now = datetime.now().strftime("%H:%M:%S")
 
-    # Use an inner table for left/right alignment
     header_table = Table.grid(expand=True)
     header_table.add_column("left", ratio=1)
     header_table.add_column("right", justify="right")
 
-    # Left side: brand + ticker tape
     left = Text()
-    left.append(" CRYPTOSCOPE ", style="bold cornflower_blue")
-    left.append(" ", style="grey27")
+    left.append(" CRYPTOSCOPE ", style=f"bold {_themes.BORDER_ACTIVE}")
+    left.append(" ", style=_themes.BORDER_DIM)
 
     if tickers:
         for i, t in enumerate(tickers[:5]):
             if i > 0:
-                left.append("  │  ", style="grey27")
+                left.append("  │  ", style=_themes.BORDER_DIM)
             left.append(f"{t.symbol} ", style="bold white")
             left.append(format_price(t.price_usd), style="bright_white")
             left.append(" ")
@@ -101,7 +88,6 @@ def build_header(tickers: list[Ticker] | None = None) -> Panel:
     else:
         left.append("Loading...", style="grey42")
 
-    # Right side: clock
     right = Text()
     right.append(now, style="grey70")
     right.append(" ")
@@ -110,9 +96,9 @@ def build_header(tickers: list[Ticker] | None = None) -> Panel:
 
     return Panel(
         header_table,
-        box=BOX_DEFAULT,
-        border_style=BORDER_DIM,
-        style=f"on {BG_SURFACE}",
+        box=_themes.BOX_DEFAULT,
+        border_style=_themes.BORDER_DIM,
+        style=f"on {_themes.BG_SURFACE}",
         height=3,
     )
 
@@ -123,6 +109,8 @@ def build_header(tickers: list[Ticker] | None = None) -> Panel:
 VIEW_WATCHLIST = "watchlist"
 VIEW_CHART = "chart"
 VIEW_SENTIMENT = "sentiment"
+VIEW_PAIRS = "pairs"
+VIEW_SETTINGS = "settings"
 
 
 def build_footer(
@@ -131,10 +119,7 @@ def build_footer(
     status: str = "OK",
     keybindings: list[tuple[str, str]] | None = None,
 ) -> Panel:
-    """Build the shared footer bar used by all views.
-
-    Layout: [tab bar] | [status dot + timestamp] | [keybindings]
-    """
+    """Build the shared footer bar used by all views."""
     footer = Table.grid(expand=True)
     footer.add_column("tabs", ratio=1)
     footer.add_column("status", justify="center", ratio=1)
@@ -145,12 +130,14 @@ def build_footer(
     tab_defs = [
         ("F1", "Watchlist", VIEW_WATCHLIST),
         ("F2", "Sentiment", VIEW_SENTIMENT),
+        ("F3", "Pairs", VIEW_PAIRS),
+        ("F7", "Settings", VIEW_SETTINGS),
     ]
     for key, label, view_id in tab_defs:
         if view_id == active_view:
-            tabs.append(f" {key} {label} ", style=f"bold bright_white on {BG_SELECTED}")
+            tabs.append(f" {key} {label} ", style=f"bold bright_white on {_themes.BG_SELECTED}")
         else:
-            tabs.append(f" {key} {label} ", style=f"grey50 on {BG_SURFACE}")
+            tabs.append(f" {key} {label} ", style=f"grey50 on {_themes.BG_SURFACE}")
         tabs.append(" ")
 
     # --- Status ---
@@ -166,17 +153,74 @@ def build_footer(
     keys_text = Text()
     if keybindings:
         for key, action in keybindings:
-            keys_text.append(f"{key}", style="bold cornflower_blue")
+            keys_text.append(f"{key}", style=f"bold {_themes.BORDER_ACTIVE}")
             keys_text.append(f" {action}  ", style="grey62")
 
     footer.add_row(tabs, status_text, keys_text)
 
     return Panel(
         footer,
-        box=BOX_DEFAULT,
-        border_style=BORDER_DIM,
-        style=f"on {BG_SURFACE}",
+        box=_themes.BOX_DEFAULT,
+        border_style=_themes.BORDER_DIM,
+        style=f"on {_themes.BG_SURFACE}",
         height=3,
+    )
+
+
+# ── Order Book ────────────────────────────────────────────────────
+
+
+def build_order_book_panel(order_book: OrderBook, height: int = 20) -> Panel:
+    """Render a depth-style order book with bid/ask bars."""
+    half = height // 2
+
+    table = Table(
+        show_header=True,
+        box=None,
+        expand=True,
+        padding=(0, 1),
+        header_style="bold grey70",
+    )
+    table.add_column("Price", justify="right", style="bright_white", ratio=2)
+    table.add_column("Size", justify="right", ratio=2)
+    table.add_column("", ratio=1)
+
+    asks = order_book.asks[:half]
+    bids = order_book.bids[:half]
+
+    max_qty = max(
+        max((a.quantity for a in asks), default=1),
+        max((b.quantity for b in bids), default=1),
+    )
+    if max_qty <= 0:
+        max_qty = 1
+
+    bar_width = 8
+
+    # Asks (sell side) — reversed so lowest ask is near the spread
+    for ask in reversed(asks):
+        bar_len = int((ask.quantity / max_qty) * bar_width)
+        bar = Text("█" * bar_len, style="red")
+        table.add_row(f"{ask.price:,.2f}", f"{ask.quantity:.4f}", bar)
+
+    # Spread
+    if bids and asks:
+        spread = asks[0].price - bids[0].price
+        spread_pct = (spread / asks[0].price) * 100
+        spread_text = Text(f"  Spread {spread:.2f} ({spread_pct:.3f}%)", style="grey50")
+        table.add_row("", spread_text, "")
+
+    # Bids (buy side)
+    for bid in bids:
+        bar_len = int((bid.quantity / max_qty) * bar_width)
+        bar = Text("█" * bar_len, style="green")
+        table.add_row(f"{bid.price:,.2f}", f"{bid.quantity:.4f}", bar)
+
+    return Panel(
+        table,
+        title="[bold grey70]Order Book[/bold grey70]",
+        box=_themes.BOX_DEFAULT,
+        border_style=_themes.BORDER_DIM,
     )
 
 
@@ -193,13 +237,13 @@ def build_watchlist_table(
         price_history = {}
 
     table = Table(
-        box=BOX_TABLE,
+        box=_themes.BOX_TABLE,
         show_header=True,
         header_style="bold grey70",
-        border_style=BORDER_DIM,
+        border_style=_themes.BORDER_DIM,
         expand=True,
         pad_edge=True,
-        row_styles=["", f"on grey7"],
+        row_styles=["", "on grey7"],
     )
 
     table.add_column("#", style="grey50", width=4, justify="right")
@@ -213,17 +257,13 @@ def build_watchlist_table(
     table.add_column("Mkt Cap", justify="right", min_width=12)
     table.add_column("7d", justify="center", width=8)
 
-    # Find max volume for volume bars
     max_vol = max((t.volume_24h for t in tickers), default=1) if tickers else 1
 
     for idx, ticker in enumerate(tickers):
-        row_style = f"bold on {BG_SELECTED}" if idx == selected_row else ""
+        row_style = f"bold on {_themes.BG_SELECTED}" if idx == selected_row else ""
 
-        # Sparkline from price history
         history = price_history.get(ticker.id, [])
         spark = _sparkline(history)
-
-        # Volume bar
         vol_bar = _volume_bar(ticker.volume_24h, max_vol)
 
         table.add_row(

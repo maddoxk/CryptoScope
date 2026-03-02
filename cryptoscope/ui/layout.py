@@ -15,7 +15,7 @@ from cryptoscope.ui.panels import (
     build_header,
     build_watchlist_table,
 )
-from cryptoscope.ui.themes import BORDER_DIM, BOX_DEFAULT
+import cryptoscope.ui.themes as _themes
 
 
 class TerminalLayout:
@@ -63,8 +63,8 @@ class TerminalLayout:
             layout["body"].update(
                 Panel(
                     Text("Loading market data...", style="grey42", justify="center"),
-                    box=BOX_DEFAULT,
-                    border_style=BORDER_DIM,
+                    box=_themes.BOX_DEFAULT,
+                    border_style=_themes.BORDER_DIM,
                 )
             )
 
