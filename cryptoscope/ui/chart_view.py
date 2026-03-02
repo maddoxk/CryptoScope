@@ -54,6 +54,7 @@ class ChartView:
         self.zoom_level: int = 0
         self.last_update = None
         self.status: str = "OK"
+        self.status_msg: str = ""
         # Order book
         self.show_order_book: bool = False
         self.order_book: OrderBook | None = None
@@ -192,6 +193,7 @@ class ChartView:
                 last_update=self.last_update,
                 status=self.status,
                 keybindings=self.CHART_KEYS,
+                error_msg=self.status_msg,
             )
         )
 

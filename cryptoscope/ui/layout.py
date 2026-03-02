@@ -33,6 +33,7 @@ class TerminalLayout:
         self.price_history: dict[str, list[float]] = {}
         self.last_update: datetime | None = None
         self.status: str = "OK"
+        self.status_msg: str = ""
 
     def update_tickers(self, tickers: list[Ticker]) -> None:
         """Update the ticker data."""
@@ -74,6 +75,7 @@ class TerminalLayout:
                 last_update=self.last_update,
                 status=self.status,
                 keybindings=self.WATCHLIST_KEYS,
+                error_msg=self.status_msg,
             )
         )
 

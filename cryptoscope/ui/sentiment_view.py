@@ -39,6 +39,7 @@ class SentimentView:
         self.tickers = []  # for header ticker tape
         self.last_update = None
         self.status: str = "OK"
+        self.status_msg: str = ""
 
     def scroll_news(self, direction: int) -> None:
         """Scroll the news feed up or down."""
@@ -91,6 +92,7 @@ class SentimentView:
                 last_update=self.last_update,
                 status=self.status,
                 keybindings=self.SENTIMENT_KEYS,
+                error_msg=self.status_msg,
             )
         )
 

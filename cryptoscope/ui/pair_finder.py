@@ -37,7 +37,7 @@ class PairFinderView:
 
         # Pagination
         self.current_page: int = 1
-        self.total_pages: int = 1
+        self.total_pages: int = 999  # conservative upper bound; rolled back if API returns empty
         self.per_page: int = 50
         self.total_coins: int = 0
 
@@ -61,6 +61,7 @@ class PairFinderView:
         self.tickers: list[Ticker] = []
         self.last_update = None
         self.status: str = "OK"
+        self.status_msg: str = ""
 
     # ── Flash messages ────────────────────────────────────────────
 
@@ -137,7 +138,13 @@ class PairFinderView:
                 return "fetch_page"
 
         elif key == "RIGHT":
-            if self.current_page < self.total_pages:
+            # In browse mode, allow advancing past total_pages; the fetch
+            # will roll back if the API returns empty (no data beyond last page).
+            # In search mode, total_pages is known exactly so gate it strictly.
+            at_last = (
+                self.search_query and self.current_page >= self.total_pages
+            )
+            if not at_last:
                 self.current_page += 1
                 self.selected_row = 0
                 return "fetch_page"
@@ -220,6 +227,7 @@ class PairFinderView:
                 last_update=self.last_update,
                 status=self.status,
                 keybindings=PAIRS_KEYS,
+                error_msg=self.status_msg,
             )
         )
 

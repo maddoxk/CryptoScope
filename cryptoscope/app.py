@@ -8,6 +8,8 @@ import sys
 from datetime import datetime
 from enum import Enum, auto
 
+import httpx
+
 from rich.console import Console
 from rich.live import Live
 
@@ -76,6 +78,47 @@ class CryptoScopeApp:
         self.trends = GoogleTrendsProvider()
         self.binance = BinanceProvider()
 
+    # --- Error classification ---
+
+    @staticmethod
+    def _classify_error(e: Exception, provider: str = "") -> str:
+        """Convert an exception into a short, user-readable status message."""
+        src = f"{provider}: " if provider else ""
+        if isinstance(e, httpx.HTTPStatusError):
+            code = e.response.status_code
+            if code == 429:
+                return f"{src}429 Rate limited — slow down or add API key (F7)"
+            elif code == 401:
+                return f"{src}401 Unauthorized — check API key in Settings (F7)"
+            elif code == 403:
+                return f"{src}403 Forbidden — API key missing or invalid (F7)"
+            elif code == 404:
+                return f"{src}404 Endpoint not found — API may have changed"
+            elif code == 422:
+                return f"{src}422 Invalid request params"
+            elif code in (500, 502, 503, 504):
+                return f"{src}{code} Server error — will retry"
+            else:
+                return f"{src}HTTP {code} error"
+        elif isinstance(e, httpx.ConnectTimeout):
+            return f"{src}Connection timed out — check internet"
+        elif isinstance(e, httpx.ReadTimeout):
+            return f"{src}Read timed out — server too slow"
+        elif isinstance(e, httpx.ConnectError):
+            return f"{src}Cannot connect — check internet connection"
+        elif isinstance(e, httpx.NetworkError):
+            return f"{src}Network error — check internet connection"
+        elif isinstance(e, httpx.DecodingError):
+            return f"{src}Invalid response — unexpected API format"
+        elif isinstance(e, asyncio.TimeoutError):
+            return f"{src}Request timed out"
+        else:
+            # Truncate long generic messages
+            msg = str(e)
+            if len(msg) > 60:
+                msg = msg[:57] + "…"
+            return f"{src}{msg}" if msg else f"{src}Unexpected error"
+
     # --- Data fetching ---
 
     async def _fetch_watchlist(self) -> None:
@@ -97,9 +140,11 @@ class CryptoScopeApp:
             for t in tickers:
                 history[t.id] = await self.db.snapshot_get_recent_prices(t.id)
             self.layout.price_history = history
+            self.layout.status_msg = ""
         except Exception as e:
             logger.error("Failed to fetch watchlist: %s", e)
             self.layout.status = "ERROR"
+            self.layout.status_msg = self._classify_error(e, "CoinGecko")
 
     async def _fetch_chart_data(self, coin_id: str) -> None:
         """Fetch OHLCV data for the chart view.
@@ -134,12 +179,18 @@ class CryptoScopeApp:
             if candles:
                 self.chart_view.set_data(ticker, candles)
                 self.chart_view.last_update = self.layout.last_update
+                self.chart_view.status = "OK"
+                self.chart_view.status_msg = ""
         except Exception as e:
             logger.error("Failed to fetch chart data for %s: %s", coin_id, e)
+            self.chart_view.status = "ERROR"
+            self.chart_view.status_msg = self._classify_error(e, "Chart")
 
     async def _fetch_sentiment_data(self) -> None:
         """Fetch all sentiment data sources concurrently."""
         sv = self.sentiment_view
+
+        errors: list[str] = []
 
         async def _fetch_fear_greed():
             try:
@@ -150,6 +201,7 @@ class CryptoScopeApp:
                 sv.fear_greed_history = history
             except Exception as e:
                 logger.warning("Fear & Greed fetch failed: %s", e)
+                errors.append(self._classify_error(e, "Fear/Greed"))
 
         async def _fetch_news():
             try:
@@ -158,6 +210,7 @@ class CryptoScopeApp:
                 sv.news_items = await self.cryptopanic.fetch_news(currencies=currencies)
             except Exception as e:
                 logger.warning("News fetch failed: %s", e)
+                errors.append(self._classify_error(e, "CryptoPanic"))
 
         async def _fetch_social():
             try:
@@ -166,6 +219,7 @@ class CryptoScopeApp:
                     sv.social_metrics = await self.lunarcrush.fetch_social_metrics(symbols)
             except Exception as e:
                 logger.warning("Social metrics fetch failed: %s", e)
+                errors.append(self._classify_error(e, "LunarCrush"))
 
         async def _fetch_reddit():
             try:
@@ -175,6 +229,7 @@ class CryptoScopeApp:
                     sv.trending_topics = reddit_topics
             except Exception as e:
                 logger.warning("Reddit fetch failed: %s", e)
+                errors.append(self._classify_error(e, "Reddit"))
 
         async def _fetch_trends():
             try:
@@ -182,6 +237,7 @@ class CryptoScopeApp:
                     sv.trending_topics = await self.trends.fetch_interest()
             except Exception as e:
                 logger.warning("Google Trends fetch failed: %s", e)
+                errors.append(self._classify_error(e, "Trends"))
 
         await asyncio.gather(
             _fetch_fear_greed(),
@@ -192,6 +248,12 @@ class CryptoScopeApp:
             return_exceptions=True,
         )
         sv.last_update = datetime.now()
+        if errors:
+            sv.status = "ERROR"
+            sv.status_msg = errors[0]  # show the first (most prominent) error
+        else:
+            sv.status = "OK"
+            sv.status_msg = ""
 
     # --- Theme ---
 
@@ -254,8 +316,12 @@ class CryptoScopeApp:
                     if cv.show_order_book and cv.binance_symbol:
                         try:
                             cv.order_book = await self.binance.fetch_order_book(cv.binance_symbol)
+                            cv.status = "OK"
+                            cv.status_msg = ""
                         except Exception as e:
                             logger.warning("Order book refresh failed: %s", e)
+                            cv.status = "ERROR"
+                            cv.status_msg = self._classify_error(e, "Binance")
                 elif self.view_mode == ViewMode.SENTIMENT:
                     await self._fetch_sentiment_data()
                 self._request_render()
@@ -358,9 +424,11 @@ class CryptoScopeApp:
             total = len(pf.coin_list)
             pf.total_coins = total
             pf.total_pages = max(1, (total + pf.per_page - 1) // pf.per_page)
+            pf.status_msg = ""
         except Exception as e:
             logger.error("Failed to fetch coin list: %s", e)
             pf.status = "ERROR"
+            pf.status_msg = self._classify_error(e, "CoinGecko")
 
     async def _fetch_pairs_page(self) -> None:
         """Fetch market data for the current page (browse or search mode)."""
@@ -382,14 +450,24 @@ class CryptoScopeApp:
                 tickers = await self.coingecko.fetch_market_page(
                     page=pf.current_page, per_page=pf.per_page
                 )
-                pf.page_tickers = tickers
+                if tickers:
+                    pf.page_tickers = tickers
+                    # Update total_pages as a floor — we know we can reach this page
+                    pf.total_pages = max(pf.total_pages, pf.current_page)
+                else:
+                    # Past the real end — roll back
+                    pf.current_page = max(1, pf.current_page - 1)
+                    pf.total_pages = pf.current_page
 
             pf.selected_row = min(pf.selected_row, max(0, len(pf.page_tickers) - 1))
             pf.status = "OK"
+            pf.status_msg = ""
             self._request_render()
         except Exception as e:
             logger.error("Failed to fetch pairs page: %s", e)
             pf.status = "ERROR"
+            pf.status_msg = self._classify_error(e, "CoinGecko")
+            self._request_render()
 
     async def _handle_watchlist_key(self, key: str) -> None:
         tickers = self.layout.tickers
@@ -444,8 +522,12 @@ class CryptoScopeApp:
             if cv.show_order_book and cv.binance_symbol:
                 try:
                     cv.order_book = await self.binance.fetch_order_book(cv.binance_symbol)
+                    cv.status = "OK"
+                    cv.status_msg = ""
                 except Exception as e:
                     logger.warning("Order book fetch failed: %s", e)
+                    cv.status = "ERROR"
+                    cv.status_msg = self._classify_error(e, "Binance")
 
         if needs_data and cv.coin_id:
             await self._fetch_chart_data(cv.coin_id)

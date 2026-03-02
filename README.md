@@ -247,6 +247,13 @@ pytest
 
 ## Changelog
 
+### v1.4.001
+
+- **Error Messages in Footer**: All views now display human-readable error messages in the footer status bar when data fetches fail (e.g. "429 Rate limited — add API key (F7)", "Cannot connect — check internet")
+- **Error Classification**: Centralized `_classify_error` helper maps HTTP status codes and network errors to actionable messages across all data providers
+- **Pair Finder Pagination Fix**: Browse mode now uses an optimistic upper bound for total pages and rolls back cleanly when the API returns an empty page
+- **Status Propagation**: `status_msg` field added to all views (watchlist, chart, sentiment, pairs) and wired through the footer builder
+
 ### v1.4.000
 
 - **Pair Finder** (`F3`): Browse all CoinGecko coins by market cap, search by name/symbol/ID, add/remove from watchlist with `a`/`d`

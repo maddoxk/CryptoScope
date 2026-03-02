@@ -118,6 +118,7 @@ def build_footer(
     last_update: datetime | None = None,
     status: str = "OK",
     keybindings: list[tuple[str, str]] | None = None,
+    error_msg: str = "",
 ) -> Panel:
     """Build the shared footer bar used by all views."""
     footer = Table.grid(expand=True)
@@ -144,7 +145,11 @@ def build_footer(
     status_text = Text()
     dot_style = "bold green" if status == "OK" else "bold red"
     status_text.append(" ● ", style=dot_style)
-    if last_update:
+    if status != "OK" and error_msg:
+        # Truncate to keep footer tidy
+        msg = error_msg if len(error_msg) <= 55 else error_msg[:52] + "…"
+        status_text.append(msg, style="bold red")
+    elif last_update:
         status_text.append(last_update.strftime("%H:%M:%S"), style="grey70")
     else:
         status_text.append("---", style="grey42")
