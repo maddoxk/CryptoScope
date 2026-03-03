@@ -58,6 +58,9 @@ class PairFinderView:
         self._flash_msg: str = ""
         self._flash_until: float = 0.0
 
+        # Loading state
+        self.loading: bool = False
+
         # Header ticker tape
         self.tickers: list[Ticker] = []
         self.last_update = None
@@ -315,7 +318,9 @@ class PairFinderView:
                 style=row_style,
             )
 
-        if not self.page_tickers:
+        if self.loading:
+            table.add_row("", "", Text("Loading page…", style=f"bold {_themes.BORDER_ACTIVE}"), "", "", "", "", "")
+        elif not self.page_tickers:
             table.add_row("", "", Text("Loading...", style="grey42"), "", "", "", "", "")
 
         return table

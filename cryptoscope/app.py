@@ -460,11 +460,13 @@ class CryptoScopeApp:
                     pf.total_pages = pf.current_page
 
             pf.selected_row = min(pf.selected_row, max(0, len(pf.page_tickers) - 1))
+            pf.loading = False
             pf.status = "OK"
             pf.status_msg = ""
             self._request_render()
         except Exception as e:
             logger.error("Failed to fetch pairs page: %s", e)
+            pf.loading = False
             pf.status = "ERROR"
             pf.status_msg = self._classify_error(e, "CoinGecko")
             self._request_render()
@@ -557,7 +559,8 @@ class CryptoScopeApp:
         if action == "exit":
             self.view_mode = self._previous_view
         elif action in ("fetch_page", "fetch_search"):
-            await self._fetch_pairs_page()
+            pf.loading = True
+            asyncio.create_task(self._fetch_pairs_page())
         elif action == "add":
             coin = pf.selected_coin
             if coin:
