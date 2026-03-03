@@ -556,10 +556,8 @@ class CryptoScopeApp:
         action = pf.handle_key(key)
         if action == "exit":
             self.view_mode = self._previous_view
-        elif action == "fetch_page":
-            asyncio.create_task(self._fetch_pairs_page())
-        elif action == "fetch_search":
-            asyncio.create_task(self._fetch_pairs_page())
+        elif action in ("fetch_page", "fetch_search"):
+            await self._fetch_pairs_page()
         elif action == "add":
             coin = pf.selected_coin
             if coin:
