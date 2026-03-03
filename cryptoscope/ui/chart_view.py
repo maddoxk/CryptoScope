@@ -56,6 +56,7 @@ class ChartView:
         self.last_update = None
         self.status: str = "OK"
         self.status_msg: str = ""
+        self.provider: str = "coingecko"
         # Order book
         self.show_order_book: bool = False
         self.order_book: OrderBook | None = None
@@ -105,8 +106,7 @@ class ChartView:
         elif name == "bollinger":
             cfg.show_bollinger = not cfg.show_bollinger
         elif name == "sma":
-            # Toggle the dedicated SMA subplot; keep the period list intact
-            cfg.show_sma_panel = not cfg.show_sma_panel
+            cfg.show_sma = [] if cfg.show_sma else [20, 50]
         elif name == "ema":
             cfg.show_ema = [] if cfg.show_ema else [20, 50]
 
@@ -153,7 +153,7 @@ class ChartView:
         )
 
         # Header — reuse shared ticker-tape header
-        layout["header"].update(build_header(self.tickers))
+        layout["header"].update(build_header(self.tickers, provider=self.provider))
 
         # Breadcrumb bar
         layout["breadcrumb"].update(self._build_breadcrumb())
@@ -333,7 +333,7 @@ class ChartView:
         toggles = Text()
         cfg = self.chart_config
         for name, active in [
-            ("SMA", cfg.show_sma_panel and bool(cfg.show_sma)),
+            ("SMA", bool(cfg.show_sma)),
             ("EMA", bool(cfg.show_ema)),
             ("BB", cfg.show_bollinger),
             ("RSI", cfg.show_rsi),

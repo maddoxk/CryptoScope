@@ -69,7 +69,6 @@ class ChartConfig:
     show_sma: list[int] = field(default_factory=lambda: [20, 50])
     show_ema: list[int] = field(default_factory=list)
     show_bollinger: bool = False
-    show_sma_panel: bool = True   # dedicated SMA subplot below volume
     show_rsi: bool = False
     show_macd: bool = False
 
@@ -98,14 +97,16 @@ def render_candlestick_chart(
     height = max(10, config.height)
 
     # How many subplots do we need?
+    # SMA/EMA overlay the price chart — no separate subplot.
+    # RSI and MACD share one combined indicator subplot.
+    has_indicator_panel = (
+        (config.show_rsi and "rsi" in indicators)
+        or (config.show_macd and "macd_line" in indicators)
+    )
     n_subplots = 1  # price always
     if config.show_volume:
         n_subplots += 1
-    if config.show_sma_panel and (config.show_sma or config.show_ema):
-        n_subplots += 1
-    if config.show_rsi and "rsi" in indicators:
-        n_subplots += 1
-    if config.show_macd and "macd_line" in indicators:
+    if has_indicator_panel:
         n_subplots += 1
 
     plt.clear_figure()
@@ -137,7 +138,37 @@ def render_candlestick_chart(
                 d, v = zip(*valid)
                 plt.plot(list(d), list(v), label=label, color=BB_COLOR, marker=_MARKER)
 
-    # Candlesticks drawn after BB so candle bodies remain visible
+    # Overlay SMA lines on price chart
+    for period in config.show_sma:
+        key = f"sma_{period}"
+        if key in indicators:
+            vals = indicators[key]
+            valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
+            if valid:
+                dx, vx = zip(*valid)
+                plt.plot(
+                    list(dx), list(vx),
+                    label=f"SMA {period}",
+                    color=SMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
+                    marker=_MARKER,
+                )
+
+    # Overlay EMA lines on price chart
+    for period in config.show_ema:
+        key = f"ema_{period}"
+        if key in indicators:
+            vals = indicators[key]
+            valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
+            if valid:
+                dx, vx = zip(*valid)
+                plt.plot(
+                    list(dx), list(vx),
+                    label=f"EMA {period}",
+                    color=EMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
+                    marker=_MARKER,
+                )
+
+    # Candlesticks drawn after overlays so candle bodies remain visible
     plt.candlestick(dates, {"Open": opens, "Close": closes, "High": highs, "Low": lows})
     plt.title(title or "Price Chart")
 
@@ -151,85 +182,45 @@ def render_candlestick_chart(
         plt.title("Volume")
         plt.date_form("m/d H:M")
 
-    # --- SMA/EMA subplot ---
-    if config.show_sma_panel and (config.show_sma or config.show_ema):
+    # --- Combined indicator subplot (RSI and/or MACD) ---
+    if has_indicator_panel:
         subplot_idx += 1
         plt.subplot(subplot_idx, 1)
         plt.date_form("m/d H:M")
-        has_data = False
-        for period in config.show_sma:
-            key = f"sma_{period}"
-            if key in indicators:
-                vals = indicators[key]
-                valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
-                if valid:
-                    d, v = zip(*valid)
-                    plt.plot(
-                        list(d), list(v),
-                        label=f"SMA {period}",
-                        color=SMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
-                        marker=_MARKER,
-                    )
-                    has_data = True
-        for period in config.show_ema:
-            key = f"ema_{period}"
-            if key in indicators:
-                vals = indicators[key]
-                valid = [(d, v) for d, v in zip(dates, vals) if v is not None]
-                if valid:
-                    d, v = zip(*valid)
-                    plt.plot(
-                        list(d), list(v),
-                        label=f"EMA {period}",
-                        color=EMA_COLORS.get(period, DEFAULT_INDICATOR_COLOR),
-                        marker=_MARKER,
-                    )
-                    has_data = True
-        sma_label = "/".join(
-            [f"SMA{p}" for p in config.show_sma] + [f"EMA{p}" for p in config.show_ema]
-        )
-        plt.title(sma_label if has_data else "SMA")
+        ind_labels = []
 
-    # --- RSI subplot ---
-    if config.show_rsi and "rsi" in indicators:
-        subplot_idx += 1
-        plt.subplot(subplot_idx, 1)
-        rsi_vals = indicators["rsi"]
-        valid = [(d, v) for d, v in zip(dates, rsi_vals) if v is not None]
-        if valid:
-            d, v = zip(*valid)
-            plt.plot(list(d), list(v), label="RSI(14)", color="magenta")
-            plt.hline(70, color="red")
-            plt.hline(30, color="green")
-        plt.title("RSI (14)")
-        plt.date_form("m/d H:M")
-        plt.ylim(0, 100)
+        if config.show_rsi and "rsi" in indicators:
+            rsi_vals = indicators["rsi"]
+            valid = [(d, v) for d, v in zip(dates, rsi_vals) if v is not None]
+            if valid:
+                dx, vx = zip(*valid)
+                plt.plot(list(dx), list(vx), label="RSI", color="magenta", marker=_MARKER)
+                plt.hline(70, color="red")
+                plt.hline(30, color="green")
+            ind_labels.append("RSI(14)")
 
-    # --- MACD subplot ---
-    if config.show_macd and "macd_line" in indicators:
-        subplot_idx += 1
-        plt.subplot(subplot_idx, 1)
-        macd_line = indicators["macd_line"]
-        signal_line = indicators["macd_signal"]
-        histogram = indicators["macd_histogram"]
+        if config.show_macd and "macd_line" in indicators:
+            macd_line = indicators["macd_line"]
+            signal_line = indicators["macd_signal"]
+            histogram = indicators["macd_histogram"]
 
-        valid_macd = [(d, v) for d, v in zip(dates, macd_line) if v is not None]
-        valid_sig = [(d, v) for d, v in zip(dates, signal_line) if v is not None]
-        valid_hist = [(d, v) for d, v in zip(dates, histogram) if v is not None]
+            valid_hist = [(d, v) for d, v in zip(dates, histogram) if v is not None]
+            valid_macd = [(d, v) for d, v in zip(dates, macd_line) if v is not None]
+            valid_sig = [(d, v) for d, v in zip(dates, signal_line) if v is not None]
 
-        if valid_hist:
-            d, v = zip(*valid_hist)
-            hist_colors = ["green" if val >= 0 else "red" for val in v]
-            plt.bar(list(d), list(v), color=hist_colors)
-        if valid_macd:
-            d, v = zip(*valid_macd)
-            plt.plot(list(d), list(v), label="MACD", color="cyan")
-        if valid_sig:
-            d, v = zip(*valid_sig)
-            plt.plot(list(d), list(v), label="Signal", color="orange")
+            if valid_hist:
+                dx, vx = zip(*valid_hist)
+                hist_colors = ["green" if val >= 0 else "red" for val in vx]
+                plt.bar(list(dx), list(vx), color=hist_colors)
+            if valid_macd:
+                dx, vx = zip(*valid_macd)
+                plt.plot(list(dx), list(vx), label="MACD", color="cyan", marker=_MARKER)
+            if valid_sig:
+                dx, vx = zip(*valid_sig)
+                plt.plot(list(dx), list(vx), label="Signal", color="orange", marker=_MARKER)
+            ind_labels.append("MACD(12,26,9)")
 
-        plt.title("MACD (12, 26, 9)")
-        plt.date_form("m/d H:M")
+        plt.title("  /  ".join(ind_labels))
 
     return Text.from_ansi(plt.build())
 
