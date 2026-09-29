@@ -108,60 +108,51 @@ class OnChainView:
         text = Text()
 
         # Row 1: BTC telemetry
-        ms = self.mempool_stats or MempoolStats(
-            hashrate_eh=685.2,
-            difficulty_trillion=92.4,
-            difficulty_change_pct=1.8,
-            difficulty_change_days=3.0,
-            mempool_tx_count=142000,
-            mempool_size_bytes=184 * 1024 * 1024,
-        )
-
-        text.append("BTC Hashrate: ", style="bold bright_white")
-        text.append(f"{ms.hashrate_eh:.1f} EH/s", style="bold cyan")
-        text.append("  |  ", style="grey42")
-        text.append("Difficulty: ", style="bold bright_white")
-        diff_sign = "+" if ms.difficulty_change_pct >= 0 else ""
-        diff_style = "green" if ms.difficulty_change_pct >= 0 else "red"
-        text.append(f"{ms.difficulty_trillion:.1f} T ", style="bright_white")
-        text.append(f"({diff_sign}{ms.difficulty_change_pct:.1f}% in {ms.difficulty_change_days:.0f}d)", style=diff_style)
-        text.append("  |  ", style="grey42")
-        text.append("Mempool: ", style="bold bright_white")
-        tx_k = ms.mempool_tx_count / 1000
-        mb = ms.mempool_size_mb
-        text.append(f"{tx_k:.0f}k txs ({mb:.0f} MB)", style="yellow")
+        ms = self.mempool_stats
+        if ms and (ms.hashrate_eh > 0 or ms.mempool_tx_count > 0):
+            text.append("BTC Hashrate: ", style="bold bright_white")
+            text.append(f"{ms.hashrate_eh:.1f} EH/s" if ms.hashrate_eh > 0 else "N/A", style="bold cyan")
+            text.append("  |  ", style="grey42")
+            text.append("Difficulty: ", style="bold bright_white")
+            diff_sign = "+" if ms.difficulty_change_pct >= 0 else ""
+            diff_style = "green" if ms.difficulty_change_pct >= 0 else "red"
+            text.append(f"{ms.difficulty_trillion:.1f} T " if ms.difficulty_trillion > 0 else "N/A ", style="bright_white")
+            if ms.difficulty_change_pct != 0.0:
+                text.append(f"({diff_sign}{ms.difficulty_change_pct:.1f}% in {ms.difficulty_change_days:.0f}d)", style=diff_style)
+            text.append("  |  ", style="grey42")
+            text.append("Mempool: ", style="bold bright_white")
+            tx_k = ms.mempool_tx_count / 1000
+            mb = ms.mempool_size_mb
+            text.append(f"{tx_k:.0f}k txs ({mb:.0f} MB)", style="yellow")
+        else:
+            text.append("Bitcoin Telemetry: [dim]Connecting to live mempool and block streams...[/dim]")
         text.append("\n")
 
         # Row 2: ETH gas tiers
-        gp = self.gas_price or GasPriceInfo(
-            safe_low=8.0,
-            standard=12.0,
-            fast=18.0,
-            base_fee=9.4,
-            priority_fee=2.1,
-            has_api_key=False,
-        )
+        gp = self.gas_price
+        if gp and gp.standard > 0:
+            text.append("ETH Gas: ", style="bold bright_white")
+            text.append("Low ", style="grey62")
+            text.append(f"{gp.safe_low:.0f} gwei", style="green")
+            text.append(" | ", style="grey42")
+            text.append("Med ", style="grey62")
+            text.append(f"{gp.standard:.0f} gwei", style="yellow")
+            text.append(" | ", style="grey42")
+            text.append("High ", style="grey62")
+            text.append(f"{gp.fast:.0f} gwei", style="red")
+            text.append(" | ", style="grey42")
+            text.append("Base Fee: ", style="grey62")
+            text.append(f"{gp.base_fee:.1f} gwei", style="bright_white")
+            text.append(" | ", style="grey42")
+            text.append("Priority: ", style="grey62")
+            text.append(f"{gp.priority_fee:.1f} gwei", style="bright_white")
 
-        text.append("ETH Gas: ", style="bold bright_white")
-        text.append("Low ", style="grey62")
-        text.append(f"{gp.safe_low:.0f} gwei", style="green")
-        text.append(" | ", style="grey42")
-        text.append("Med ", style="grey62")
-        text.append(f"{gp.standard:.0f} gwei", style="yellow")
-        text.append(" | ", style="grey42")
-        text.append("High ", style="grey62")
-        text.append(f"{gp.fast:.0f} gwei", style="red")
-        text.append(" | ", style="grey42")
-        text.append("Base Fee: ", style="grey62")
-        text.append(f"{gp.base_fee:.1f} gwei", style="bright_white")
-        text.append(" | ", style="grey42")
-        text.append("Priority: ", style="grey62")
-        text.append(f"{gp.priority_fee:.1f} gwei", style="bright_white")
-
-        if not gp.has_api_key:
-            text.append("  [dim yellow](Etherscan free tier — configure key in F7 Settings)[/dim yellow]")
-        elif gp.status_msg:
-            text.append(f"  [dim grey62]({gp.status_msg})[/dim grey62]")
+            if not gp.has_api_key:
+                text.append("  [dim yellow](Public RPC fallback — configure key in F7 Settings)[/dim yellow]")
+            elif gp.status_msg:
+                text.append(f"  [dim grey62]({gp.status_msg})[/dim grey62]")
+        else:
+            text.append("Ethereum Gas: [dim]Connecting to live public Ethereum RPC...[/dim]")
 
         return Panel(
             text,
@@ -174,26 +165,23 @@ class OnChainView:
         """Exchange Net Flows (24h): Inflow (sell pressure) vs Outflow (accumulation)."""
         text = Text()
 
-        flows = self.exchange_flows or [
-            ExchangeFlow(symbol="BTC", net_flow=-12450.0, flow_usd=1058250000.0, classification="Outflow / Bullish Accumulation"),
-            ExchangeFlow(symbol="ETH", net_flow=48200.0, flow_usd=125320000.0, classification="Inflow / Potential Sell Pressure"),
-        ]
+        flows = self.exchange_flows
+        if not flows or all(f.net_flow == 0.0 for f in flows):
+            text.append("Exchange Net Flows: [dim]Monitoring live mempool and block transactions (no exchange flow bias detected in current window)[/dim]")
+        else:
+            for i, flow in enumerate(flows):
+                if i > 0:
+                    text.append("\n")
+                symbol = flow.symbol
+                net = flow.net_flow
+                sign = "+" if net > 0 else ""
+                arrow = "▲" if net > 0 else "▼" if net < 0 else "━"
+                color = "red" if net > 0 else "green" if net < 0 else "grey62"
+                classification = flow.resolved_classification
 
-        for i, flow in enumerate(flows):
-            if i > 0:
-                text.append("\n")
-            symbol = flow.symbol
-            net = flow.net_flow
-            sign = "+" if net > 0 else ""
-            arrow = "▲" if net > 0 else "▼"
-            # Red for net exchange inflow (coins moved to exchange to sell)
-            # Green for net exchange outflow (coins moved to cold storage)
-            color = "red" if net > 0 else "green"
-            classification = flow.resolved_classification
-
-            text.append(f"{symbol}:  ", style="bold bright_white")
-            text.append(f"{arrow} {sign}{net:,.0f} {symbol} ", style=f"bold {color}")
-            text.append(f"({classification})", style=f"{color}")
+                text.append(f"{symbol}:  ", style="bold bright_white")
+                text.append(f"{arrow} {sign}{net:,.2f} {symbol} ", style=f"bold {color}")
+                text.append(f"({classification})", style=f"{color}")
 
         return Panel(
             text,
@@ -210,7 +198,7 @@ class OnChainView:
         filtered = self.get_filtered_transfers()
         if not filtered:
             return Panel(
-                Text(f"No whale alerts found above {threshold_fmt}.\nPress 'w' to cycle threshold.", style="grey42", justify="center"),
+                Text(f"Scanning live Bitcoin mempool & Ethereum blocks...\nNo whale transactions observed above {threshold_fmt} in recent blocks.\nPress 'w' to cycle threshold ($1M / $5M / $10M) or 'r' to refresh.", style="grey50", justify="center"),
                 title=title,
                 box=_themes.BOX_DEFAULT,
                 border_style=_themes.BORDER_DIM,

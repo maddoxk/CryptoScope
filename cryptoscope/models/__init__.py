@@ -1,5 +1,11 @@
 """CryptoScope data models."""
 
+from cryptoscope.models.derivatives import (
+    DerivativesSnapshot,
+    FundingRateEntry,
+    LiquidationStats,
+    OpenInterestSummary,
+)
 from cryptoscope.models.onchain import (
     ExchangeFlow,
     GasPriceInfo,
@@ -27,4 +33,8 @@ __all__ = [
     "MempoolStats",
     "ExchangeFlow",
     "WhaleTransfer",
+    "FundingRateEntry",
+    "OpenInterestSummary",
+    "LiquidationStats",
+    "DerivativesSnapshot",
 ]

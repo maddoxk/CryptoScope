@@ -231,19 +231,37 @@ class TestOnChainProviders(IsolatedAsyncioTestCase):
         await provider.close()
 
     async def test_whale_alert_provider_threshold_and_flows(self) -> None:
-        provider = WhaleAlertProvider(threshold_usd=1_000_000.0)
+        mock_btc = MagicMock()
+        mock_btc.fetch_recent_large_transactions = AsyncMock(return_value=[
+            {"hash": "btctx123", "btc": 20.0, "timestamp": datetime.now()},
+            {"hash": "btctxsmall", "btc": 0.5, "timestamp": datetime.now()},
+        ])
+        mock_eth = MagicMock()
+        mock_eth.api_key = ""
+        mock_eth.fetch_recent_large_transactions = AsyncMock(return_value=[
+            WhaleTransfer(
+                timestamp=datetime.now(),
+                blockchain="ETH",
+                symbol="ETH",
+                amount=500.0,
+                amount_usd=1_300_000.0,
+                from_label="Unknown Wallet",
+                to_label="Binance",
+                tx_hash="ethtx123",
+                transfer_type="transfer",
+            )
+        ])
+
+        provider = WhaleAlertProvider(
+            threshold_usd=1_000_000.0,
+            blockchain_provider=mock_btc,
+            etherscan_provider=mock_eth,
+        )
         transfers = await provider.fetch_transfers(min_usd=1_000_000.0)
 
-        # Ensure seed transfers are populated and all >= $1M
         self.assertGreater(len(transfers), 0)
         for t in transfers:
             self.assertGreaterEqual(t.amount_usd, 1_000_000.0)
-
-        # Test higher threshold filter
-        filtered_5m = [t for t in transfers if t.amount_usd >= 5_000_000.0]
-        self.assertLessEqual(len(filtered_5m), len(transfers))
-        for t in filtered_5m:
-            self.assertGreaterEqual(t.amount_usd, 5_000_000.0)
 
         # Test exchange flows calculation
         flows = provider.calculate_exchange_flows(transfers)

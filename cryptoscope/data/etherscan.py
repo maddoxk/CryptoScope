@@ -141,18 +141,83 @@ class EtherscanProvider(DataProvider):
             except Exception as e:
                 logger.debug("RPC %s failed: %s", rpc, e)
 
-        # Baseline fallback if completely disconnected
+        # Baseline fallback if completely disconnected - strictly real/unavailable metrics
         return GasPriceInfo(
-            safe_low=8.0,
-            standard=12.0,
-            fast=18.0,
-            base_fee=9.4,
-            priority_fee=2.1,
-            source="Estimated",
+            safe_low=0.0,
+            standard=0.0,
+            fast=0.0,
+            base_fee=0.0,
+            priority_fee=0.0,
+            source="Unavailable",
             has_api_key=bool(self.api_key),
-            status_msg="Offline estimate",
+            status_msg="Offline (RPC unreachable)",
             timestamp=datetime.now(),
         )
+
+    async def fetch_recent_large_transactions(self, min_eth: float = 2.0, eth_price: float = 2600.0) -> list[WhaleTransfer]:
+        """Fetch real large ETH transfers from the latest Ethereum block via public RPC."""
+        known_addresses = {
+            "0x28c6c06298d514db089934071355e5743bf21d60": "Binance",
+            "0xdfd5293d8e347dff59e4571400cd383922934e81": "Binance",
+            "0x503828976d22510aad0201ac7ec88293211d23da": "Coinbase",
+            "0x71660c4005ba85c37ccec55d0c4493e66fe775d3": "Coinbase",
+            "0x2910543af39aba0cd09dbb2d50200b3e800a63d2": "Kraken",
+            "0x6cc5f688a30d37d235c1002071ef485742b96387": "OKX",
+            "0xdac17f958d2ee523a2206206994597c13d831ec7": "Tether Contract",
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC Contract",
+            "0x0000000000000000000000000000000000000000": "Null Address",
+        }
+
+        transfers: list[WhaleTransfer] = []
+        for rpc in PUBLIC_RPC_URLS:
+            try:
+                resp = await self.rpc_client.post(
+                    rpc,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "eth_getBlockByNumber",
+                        "params": ["latest", True],
+                        "id": 10,
+                    },
+                )
+                if resp.status_code == 200:
+                    b_data = resp.json().get("result", {})
+                    time_hex = b_data.get("timestamp", "0x0")
+                    block_time = datetime.fromtimestamp(int(time_hex, 16)) if time_hex != "0x0" else datetime.now()
+                    txs = b_data.get("transactions", [])
+                    for tx in txs:
+                        val_hex = tx.get("value", "0x0")
+                        val_wei = int(val_hex, 16) if isinstance(val_hex, str) else 0
+                        val_eth = val_wei / 1e18
+                        if val_eth >= min_eth:
+                            from_addr = (tx.get("from") or "").lower()
+                            to_addr = (tx.get("to") or "").lower() if tx.get("to") else ""
+                            from_label = known_addresses.get(from_addr, "Unknown Wallet")
+                            to_label = known_addresses.get(to_addr, "Unknown Wallet")
+                            is_mint = from_addr == "0x0000000000000000000000000000000000000000"
+                            t_type = "mint" if is_mint else "transfer"
+
+                            transfers.append(
+                                WhaleTransfer(
+                                    timestamp=block_time,
+                                    blockchain="ETH",
+                                    symbol="ETH",
+                                    amount=round(val_eth, 2),
+                                    amount_usd=round(val_eth * eth_price, 2),
+                                    from_address=from_addr,
+                                    from_label=from_label,
+                                    to_address=to_addr,
+                                    to_label=to_label,
+                                    tx_hash=tx.get("hash", ""),
+                                    transfer_type=t_type,
+                                )
+                            )
+                    if transfers or len(txs) > 0:
+                        break
+            except Exception as e:
+                logger.debug("Failed to fetch block transactions from %s: %s", rpc, e)
+
+        return transfers
 
     async def fetch_large_token_transfers(self, min_usd: float = 1_000_000) -> list[WhaleTransfer]:
         """Fetch large ERC-20 token transfers if API key is provided."""
