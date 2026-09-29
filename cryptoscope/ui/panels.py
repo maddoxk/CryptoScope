@@ -110,6 +110,7 @@ VIEW_WATCHLIST = "watchlist"
 VIEW_CHART = "chart"
 VIEW_SENTIMENT = "sentiment"
 VIEW_PAIRS = "pairs"
+VIEW_ONCHAIN = "onchain"
 VIEW_SETTINGS = "settings"
 
 
@@ -132,6 +133,7 @@ def build_footer(
         ("F1", "Watchlist", VIEW_WATCHLIST),
         ("F2", "Sentiment", VIEW_SENTIMENT),
         ("F3", "Pairs", VIEW_PAIRS),
+        ("F4", "On-Chain", VIEW_ONCHAIN),
         ("F7", "Settings", VIEW_SETTINGS),
     ]
     for key, label, view_id in tab_defs:
