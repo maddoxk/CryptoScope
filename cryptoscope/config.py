@@ -34,6 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "glassnode": "",
         "etherscan": "",
         "fred": "",
+        "coinglass": "",
     },
     "display": {
         "show_volume": True,
@@ -46,6 +47,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "onchain": {
         "etherscan_api_key": "",
         "whale_threshold_usd": 1_000_000,
+    },
+    "derivatives": {
+        "coinglass_api_key": "",
+        "liquidation_timeframe": "4h",
+        "sort_by": "default",
     },
 }
 
