@@ -111,6 +111,7 @@ VIEW_CHART = "chart"
 VIEW_SENTIMENT = "sentiment"
 VIEW_PAIRS = "pairs"
 VIEW_ONCHAIN = "onchain"
+VIEW_DERIVATIVES = "derivatives"
 VIEW_SETTINGS = "settings"
 
 
@@ -123,9 +124,9 @@ def build_footer(
 ) -> Panel:
     """Build the shared footer bar used by all views."""
     footer = Table.grid(expand=True)
-    footer.add_column("tabs", ratio=1)
+    footer.add_column("tabs", no_wrap=True)
     footer.add_column("status", justify="center", ratio=1)
-    footer.add_column("keys", justify="right", ratio=2)
+    footer.add_column("keys", justify="right", no_wrap=True)
 
     # --- Tab bar ---
     tabs = Text()
@@ -134,6 +135,7 @@ def build_footer(
         ("F2", "Sentiment", VIEW_SENTIMENT),
         ("F3", "Pairs", VIEW_PAIRS),
         ("F4", "On-Chain", VIEW_ONCHAIN),
+        ("F5", "Derivatives", VIEW_DERIVATIVES),
         ("F7", "Settings", VIEW_SETTINGS),
     ]
     for key, label, view_id in tab_defs:

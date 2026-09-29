@@ -103,6 +103,7 @@ CATEGORIES: list[tuple[str, list[SettingDef]]] = [
             SettingDef("glassnode", "Glassnode", SettingType.TEXT, "api_keys", masked=True),
             SettingDef("etherscan", "Etherscan", SettingType.TEXT, "api_keys", masked=True),
             SettingDef("fred", "FRED", SettingType.TEXT, "api_keys", masked=True),
+            SettingDef("coinglass", "CoinGlass", SettingType.TEXT, "api_keys", masked=True),
         ],
     ),
     (
@@ -126,6 +127,16 @@ CATEGORIES: list[tuple[str, list[SettingDef]]] = [
             SettingDef(
                 "whale_threshold_usd", "Whale Min ($)", SettingType.NUMBER, "onchain",
                 min_val=100_000, max_val=100_000_000,
+            ),
+        ],
+    ),
+    (
+        "Derivatives",
+        [
+            SettingDef("coinglass_api_key", "CoinGlass Key", SettingType.TEXT, "derivatives", masked=True),
+            SettingDef(
+                "liquidation_timeframe", "Liq Timeframe", SettingType.SELECT, "derivatives",
+                choices=["1h", "4h", "24h"],
             ),
         ],
     ),

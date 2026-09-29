@@ -18,6 +18,7 @@ from cryptoscope.data.binance import BinanceProvider
 from cryptoscope.data.blockchain_com import BlockchainComProvider
 from cryptoscope.data.coingecko import CoinGeckoProvider
 from cryptoscope.data.cryptopanic import CryptoPanicProvider
+from cryptoscope.data.derivatives import DerivativesProvider
 from cryptoscope.data.etherscan import EtherscanProvider
 from cryptoscope.data.fear_greed import FearGreedProvider
 from cryptoscope.data.lunarcrush import LunarCrushProvider
@@ -28,6 +29,7 @@ from cryptoscope.data.whale_alert import WhaleAlertProvider
 from cryptoscope.db import Database
 from cryptoscope.models.onchain import GasPriceInfo, MempoolStats
 from cryptoscope.ui.chart_view import ChartView
+from cryptoscope.ui.derivatives_view import DerivativesView
 from cryptoscope.ui.input import TerminalInput
 from cryptoscope.ui.layout import TerminalLayout
 from cryptoscope.ui.onchain_view import OnChainView
@@ -45,6 +47,7 @@ class ViewMode(Enum):
     SENTIMENT = auto()
     PAIRS = auto()
     ONCHAIN = auto()
+    DERIVATIVES = auto()
     SETTINGS = auto()
 
 
@@ -61,6 +64,7 @@ class CryptoScopeApp:
         self.chart_view = ChartView()
         self.sentiment_view = SentimentView()
         self.onchain_view = OnChainView()
+        self.derivatives_view = DerivativesView()
         self.pair_finder = PairFinderView()
         self.settings_view = SettingsView()
         self.settings_view.on_theme_change = self._apply_theme
@@ -99,6 +103,13 @@ class CryptoScopeApp:
             blockchain_provider=self.blockchain_com,
             etherscan_provider=self.etherscan,
         )
+
+        # Derivatives provider
+        deriv_cfg = self.config.get("derivatives", {})
+        self.derivatives_view.timeframe = deriv_cfg.get("liquidation_timeframe", "4h")
+        self.derivatives_view.sort_mode = deriv_cfg.get("sort_by", "default")
+        coinglass_key = deriv_cfg.get("coinglass_api_key") or api_keys.get("coinglass", "")
+        self.derivatives = DerivativesProvider(coinglass_api_key=coinglass_key, db=self.db)
 
     # --- Error classification ---
 
@@ -154,6 +165,7 @@ class CryptoScopeApp:
             self.chart_view.tickers = tickers
             self.sentiment_view.tickers = tickers
             self.onchain_view.tickers = tickers
+            self.derivatives_view.tickers = tickers
             for t in tickers:
                 await self.db.snapshot_save(
                     t.id, t.price_usd, t.market_cap, t.volume_24h, t.change_24h
@@ -339,6 +351,37 @@ class CryptoScopeApp:
             ov.status = "OK"
             ov.status_msg = ""
 
+    async def _fetch_derivatives_data(self, force_refresh: bool = False) -> None:
+        """Fetch cross-exchange derivatives and funding rates."""
+        dv = self.derivatives_view
+        dv.loading = True
+        try:
+            # Build list of coins: prioritize BTC, ETH, SOL, DOGE, then watchlist symbols, then remaining defaults
+            coins_set: set[str] = set()
+            for t in self.layout.tickers:
+                if t.symbol:
+                    coins_set.add(t.symbol.upper())
+            for c in ["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "BNB", "LINK", "SUI"]:
+                coins_set.add(c)
+
+            priority = ["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "AVAX", "BNB", "LINK", "SUI", "NEAR", "APT"]
+            ordered_coins = [c for c in priority if c in coins_set]
+            ordered_coins.extend([c for c in sorted(coins_set) if c not in ordered_coins])
+
+            snapshot = await self.derivatives.fetch_derivatives_snapshot(
+                coins=ordered_coins, force_refresh=force_refresh
+            )
+            dv.snapshot = snapshot
+            dv.last_update = datetime.now()
+            dv.status = "OK"
+            dv.status_msg = ""
+        except Exception as e:
+            logger.error("Failed to fetch derivatives data: %s", e)
+            dv.status = "ERROR"
+            dv.status_msg = self._classify_error(e, "Derivatives")
+        finally:
+            dv.loading = False
+
     # --- Theme ---
 
     def _apply_theme(self, theme_name: str) -> None:
@@ -358,6 +401,8 @@ class CryptoScopeApp:
             return self.pair_finder.build()
         elif self.view_mode == ViewMode.ONCHAIN:
             return self.onchain_view.build()
+        elif self.view_mode == ViewMode.DERIVATIVES:
+            return self.derivatives_view.build()
         elif self.view_mode == ViewMode.SETTINGS:
             return self.settings_view.build()
         return self.layout.build(selected_row=self._selected_row)
@@ -412,6 +457,8 @@ class CryptoScopeApp:
                     await self._fetch_sentiment_data()
                 elif self.view_mode == ViewMode.ONCHAIN:
                     await self._fetch_onchain_data()
+                elif self.view_mode == ViewMode.DERIVATIVES:
+                    await self._fetch_derivatives_data()
                 self._request_render()
             except Exception as e:
                 logger.error("Data loop error: %s", e)
@@ -472,6 +519,13 @@ class CryptoScopeApp:
                 self.onchain_view.tickers = self.layout.tickers
                 asyncio.create_task(self._fetch_and_render_onchain())
             return
+        if key == "F5":
+            if self.view_mode != ViewMode.DERIVATIVES:
+                self._previous_view = self.view_mode
+                self.view_mode = ViewMode.DERIVATIVES
+                self.derivatives_view.tickers = self.layout.tickers
+                asyncio.create_task(self._fetch_and_render_derivatives())
+            return
         if key == "F7":
             if self.view_mode != ViewMode.SETTINGS:
                 self._previous_view = self.view_mode
@@ -492,6 +546,8 @@ class CryptoScopeApp:
             await self._handle_pairs_key(key)
         elif self.view_mode == ViewMode.ONCHAIN:
             await self._handle_onchain_key(key)
+        elif self.view_mode == ViewMode.DERIVATIVES:
+            await self._handle_derivatives_key(key)
         elif self.view_mode == ViewMode.SETTINGS:
             await self._handle_settings_key(key)
 
@@ -503,6 +559,11 @@ class CryptoScopeApp:
     async def _fetch_and_render_onchain(self, force_refresh: bool = False) -> None:
         """Fetch on-chain telemetry then trigger a render."""
         await self._fetch_onchain_data(force_refresh=force_refresh)
+        self._request_render()
+
+    async def _fetch_and_render_derivatives(self, force_refresh: bool = False) -> None:
+        """Fetch derivatives telemetry then trigger a render."""
+        await self._fetch_derivatives_data(force_refresh=force_refresh)
         self._request_render()
 
     async def _fetch_and_render_pairs(self) -> None:
@@ -597,6 +658,11 @@ class CryptoScopeApp:
             self.view_mode = ViewMode.ONCHAIN
             self.onchain_view.tickers = self.layout.tickers
             asyncio.create_task(self._fetch_and_render_onchain())
+        elif key == "5":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.DERIVATIVES
+            self.derivatives_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_derivatives())
 
     async def _handle_chart_key(self, key: str) -> None:
         cv = self.chart_view
@@ -664,6 +730,11 @@ class CryptoScopeApp:
             self.view_mode = ViewMode.ONCHAIN
             self.onchain_view.tickers = self.layout.tickers
             asyncio.create_task(self._fetch_and_render_onchain())
+        elif key == "5":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.DERIVATIVES
+            self.derivatives_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_derivatives())
 
     async def _handle_pairs_key(self, key: str) -> None:
         pf = self.pair_finder
@@ -731,6 +802,50 @@ class CryptoScopeApp:
                 self.config["watchlist"].get("coins", [])
             )
             asyncio.create_task(self._fetch_and_render_pairs())
+        elif key == "5":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.DERIVATIVES
+            self.derivatives_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_derivatives())
+
+    async def _handle_derivatives_key(self, key: str) -> None:
+        dv = self.derivatives_view
+        if key in ("ESCAPE", "BACKSPACE"):
+            self.view_mode = ViewMode.WATCHLIST
+            self._request_render()
+        elif key in ("r", "R"):
+            asyncio.create_task(self._fetch_and_render_derivatives(force_refresh=True))
+        elif key in ("s", "S"):
+            dv.cycle_sort()
+            self._request_render()
+        elif key in ("t", "T"):
+            dv.cycle_timeframe()
+            self._request_render()
+        elif key == "UP":
+            dv.select_row(-1)
+            self._request_render()
+        elif key == "DOWN":
+            dv.select_row(1)
+            self._request_render()
+        elif key == "1":
+            self.view_mode = ViewMode.WATCHLIST
+            self._request_render()
+        elif key == "2":
+            self.view_mode = ViewMode.SENTIMENT
+            asyncio.create_task(self._fetch_and_render_sentiment())
+        elif key == "3":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.PAIRS
+            self.pair_finder.tickers = self.layout.tickers
+            self.pair_finder.watchlist_coins = list(
+                self.config["watchlist"].get("coins", [])
+            )
+            asyncio.create_task(self._fetch_and_render_pairs())
+        elif key == "4":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.ONCHAIN
+            self.onchain_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_onchain())
 
     async def _handle_settings_key(self, key: str) -> None:
         result = self.settings_view.handle_key(key)
@@ -742,6 +857,9 @@ class CryptoScopeApp:
             thresh = float(onchain_cfg.get("whale_threshold_usd", self.onchain_view.whale_threshold_usd))
             self.onchain_view.whale_threshold_usd = thresh
             self.whale_alert.threshold_usd = thresh
+            deriv_cfg = self.config.get("derivatives", {})
+            self.derivatives.coinglass_api_key = deriv_cfg.get("coinglass_api_key") or self.config.get("api_keys", {}).get("coinglass", "")
+            self.derivatives_view.timeframe = deriv_cfg.get("liquidation_timeframe", self.derivatives_view.timeframe)
             self.view_mode = self._previous_view
         self._request_render()
 
@@ -787,6 +905,7 @@ class CryptoScopeApp:
                     await self.blockchain_com.close()
                     await self.etherscan.close()
                     await self.whale_alert.close()
+                    await self.derivatives.close()
                     await self.db.close()
         finally:
             self._input.stop()
