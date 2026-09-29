@@ -43,6 +43,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_7d_change": True,
         "max_watchlist_rows": 25,
     },
+    "onchain": {
+        "etherscan_api_key": "",
+        "whale_threshold_usd": 1_000_000,
+    },
 }
 
 

@@ -15,17 +15,22 @@ from rich.live import Live
 
 from cryptoscope.config import ensure_config, save_config
 from cryptoscope.data.binance import BinanceProvider
+from cryptoscope.data.blockchain_com import BlockchainComProvider
 from cryptoscope.data.coingecko import CoinGeckoProvider
-from cryptoscope.data.symbol_map import coingecko_to_binance
 from cryptoscope.data.cryptopanic import CryptoPanicProvider
+from cryptoscope.data.etherscan import EtherscanProvider
 from cryptoscope.data.fear_greed import FearGreedProvider
 from cryptoscope.data.lunarcrush import LunarCrushProvider
 from cryptoscope.data.reddit import RedditProvider
+from cryptoscope.data.symbol_map import coingecko_to_binance
 from cryptoscope.data.trends import GoogleTrendsProvider
+from cryptoscope.data.whale_alert import WhaleAlertProvider
 from cryptoscope.db import Database
+from cryptoscope.models.onchain import GasPriceInfo, MempoolStats
 from cryptoscope.ui.chart_view import ChartView
 from cryptoscope.ui.input import TerminalInput
 from cryptoscope.ui.layout import TerminalLayout
+from cryptoscope.ui.onchain_view import OnChainView
 from cryptoscope.ui.pair_finder import PairFinderView
 from cryptoscope.ui.sentiment_view import SentimentView
 from cryptoscope.ui.settings_view import SettingsView
@@ -39,6 +44,7 @@ class ViewMode(Enum):
     CHART = auto()
     SENTIMENT = auto()
     PAIRS = auto()
+    ONCHAIN = auto()
     SETTINGS = auto()
 
 
@@ -54,6 +60,7 @@ class CryptoScopeApp:
         self.layout = TerminalLayout()
         self.chart_view = ChartView()
         self.sentiment_view = SentimentView()
+        self.onchain_view = OnChainView()
         self.pair_finder = PairFinderView()
         self.settings_view = SettingsView()
         self.settings_view.on_theme_change = self._apply_theme
@@ -77,6 +84,21 @@ class CryptoScopeApp:
         self.reddit = RedditProvider()
         self.trends = GoogleTrendsProvider()
         self.binance = BinanceProvider()
+
+        # On-Chain providers
+        onchain_cfg = self.config.get("onchain", {})
+        etherscan_key = onchain_cfg.get("etherscan_api_key") or api_keys.get("etherscan", "")
+        whale_threshold = float(onchain_cfg.get("whale_threshold_usd", 1_000_000))
+        self.onchain_view.whale_threshold_usd = whale_threshold
+
+        self.blockchain_com = BlockchainComProvider()
+        self.etherscan = EtherscanProvider(api_key=etherscan_key)
+        self.whale_alert = WhaleAlertProvider(
+            api_key=api_keys.get("whale_alert", ""),
+            threshold_usd=whale_threshold,
+            blockchain_provider=self.blockchain_com,
+            etherscan_provider=self.etherscan,
+        )
 
     # --- Error classification ---
 
@@ -131,6 +153,7 @@ class CryptoScopeApp:
             # Share tickers with other views for header ticker tape
             self.chart_view.tickers = tickers
             self.sentiment_view.tickers = tickers
+            self.onchain_view.tickers = tickers
             for t in tickers:
                 await self.db.snapshot_save(
                     t.id, t.price_usd, t.market_cap, t.volume_24h, t.change_24h
@@ -255,6 +278,67 @@ class CryptoScopeApp:
             sv.status = "OK"
             sv.status_msg = ""
 
+    async def _fetch_onchain_data(self, force_refresh: bool = False) -> None:
+        """Fetch on-chain telemetry: gas oracle, mempool/hashrate, and whale transfers."""
+        ov = self.onchain_view
+        errors: list[str] = []
+
+        has_db = getattr(self.db, "_db", None) is not None
+
+        async def _fetch_gas():
+            try:
+                if has_db and not force_refresh:
+                    cached = await self.db.cache_get("onchain_gas_price")
+                    if cached:
+                        ov.gas_price = GasPriceInfo.from_dict(cached)
+                        return
+                gp = await self.etherscan.fetch_gas_oracle()
+                ov.gas_price = gp
+                if has_db:
+                    await self.db.cache_set("onchain_gas_price", gp.to_dict(), ttl_seconds=15)
+            except Exception as e:
+                logger.warning("Gas oracle fetch failed: %s", e)
+                errors.append(self._classify_error(e, "Etherscan"))
+
+        async def _fetch_mempool():
+            try:
+                if has_db and not force_refresh:
+                    cached = await self.db.cache_get("onchain_mempool_stats")
+                    if cached:
+                        ov.mempool_stats = MempoolStats.from_dict(cached)
+                        return
+                ms = await self.blockchain_com.fetch_network_stats()
+                ov.mempool_stats = ms
+                if has_db:
+                    await self.db.cache_set("onchain_mempool_stats", ms.to_dict(), ttl_seconds=60)
+            except Exception as e:
+                logger.warning("Mempool fetch failed: %s", e)
+                errors.append(self._classify_error(e, "Blockchain.com"))
+
+        async def _fetch_whales():
+            try:
+                transfers = await self.whale_alert.fetch_transfers(min_usd=100_000)
+                flows = self.whale_alert.calculate_exchange_flows(transfers)
+                ov.whale_transfers = transfers
+                ov.exchange_flows = flows
+            except Exception as e:
+                logger.warning("Whale alert fetch failed: %s", e)
+                errors.append(self._classify_error(e, "WhaleAlert"))
+
+        await asyncio.gather(
+            _fetch_gas(),
+            _fetch_mempool(),
+            _fetch_whales(),
+            return_exceptions=True,
+        )
+        ov.last_update = datetime.now()
+        if errors:
+            ov.status = "ERROR"
+            ov.status_msg = errors[0]
+        else:
+            ov.status = "OK"
+            ov.status_msg = ""
+
     # --- Theme ---
 
     def _apply_theme(self, theme_name: str) -> None:
@@ -272,6 +356,8 @@ class CryptoScopeApp:
             return self.sentiment_view.build()
         elif self.view_mode == ViewMode.PAIRS:
             return self.pair_finder.build()
+        elif self.view_mode == ViewMode.ONCHAIN:
+            return self.onchain_view.build()
         elif self.view_mode == ViewMode.SETTINGS:
             return self.settings_view.build()
         return self.layout.build(selected_row=self._selected_row)
@@ -324,6 +410,8 @@ class CryptoScopeApp:
                             cv.status_msg = self._classify_error(e, "Binance")
                 elif self.view_mode == ViewMode.SENTIMENT:
                     await self._fetch_sentiment_data()
+                elif self.view_mode == ViewMode.ONCHAIN:
+                    await self._fetch_onchain_data()
                 self._request_render()
             except Exception as e:
                 logger.error("Data loop error: %s", e)
@@ -377,6 +465,13 @@ class CryptoScopeApp:
                 )
                 asyncio.create_task(self._fetch_and_render_pairs())
             return
+        if key == "F4":
+            if self.view_mode != ViewMode.ONCHAIN:
+                self._previous_view = self.view_mode
+                self.view_mode = ViewMode.ONCHAIN
+                self.onchain_view.tickers = self.layout.tickers
+                asyncio.create_task(self._fetch_and_render_onchain())
+            return
         if key == "F7":
             if self.view_mode != ViewMode.SETTINGS:
                 self._previous_view = self.view_mode
@@ -395,12 +490,19 @@ class CryptoScopeApp:
             await self._handle_sentiment_key(key)
         elif self.view_mode == ViewMode.PAIRS:
             await self._handle_pairs_key(key)
+        elif self.view_mode == ViewMode.ONCHAIN:
+            await self._handle_onchain_key(key)
         elif self.view_mode == ViewMode.SETTINGS:
             await self._handle_settings_key(key)
 
     async def _fetch_and_render_sentiment(self) -> None:
         """Fetch sentiment data then trigger a render."""
         await self._fetch_sentiment_data()
+        self._request_render()
+
+    async def _fetch_and_render_onchain(self, force_refresh: bool = False) -> None:
+        """Fetch on-chain telemetry then trigger a render."""
+        await self._fetch_onchain_data(force_refresh=force_refresh)
         self._request_render()
 
     async def _fetch_and_render_pairs(self) -> None:
@@ -490,6 +592,11 @@ class CryptoScopeApp:
         elif key == "2":
             self.view_mode = ViewMode.SENTIMENT
             asyncio.create_task(self._fetch_and_render_sentiment())
+        elif key == "4":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.ONCHAIN
+            self.onchain_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_onchain())
 
     async def _handle_chart_key(self, key: str) -> None:
         cv = self.chart_view
@@ -552,6 +659,11 @@ class CryptoScopeApp:
         elif key == "1":
             self.view_mode = ViewMode.WATCHLIST
             self._request_render()
+        elif key == "4":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.ONCHAIN
+            self.onchain_view.tickers = self.layout.tickers
+            asyncio.create_task(self._fetch_and_render_onchain())
 
     async def _handle_pairs_key(self, key: str) -> None:
         pf = self.pair_finder
@@ -587,11 +699,49 @@ class CryptoScopeApp:
                     pf.flash(f"{coin.symbol} not in watchlist")
         self._request_render()
 
+    async def _handle_onchain_key(self, key: str) -> None:
+        ov = self.onchain_view
+        if key in ("ESCAPE", "BACKSPACE"):
+            self.view_mode = ViewMode.WATCHLIST
+            self._request_render()
+        elif key in ("r", "R"):
+            asyncio.create_task(self._fetch_and_render_onchain(force_refresh=True))
+        elif key in ("g", "G"):
+            asyncio.create_task(self._fetch_and_render_onchain(force_refresh=True))
+        elif key in ("w", "W"):
+            ov.toggle_threshold()
+            self._request_render()
+        elif key == "UP":
+            ov.scroll_whale_feed(-1)
+            self._request_render()
+        elif key == "DOWN":
+            ov.scroll_whale_feed(1)
+            self._request_render()
+        elif key == "1":
+            self.view_mode = ViewMode.WATCHLIST
+            self._request_render()
+        elif key == "2":
+            self.view_mode = ViewMode.SENTIMENT
+            asyncio.create_task(self._fetch_and_render_sentiment())
+        elif key == "3":
+            self._previous_view = self.view_mode
+            self.view_mode = ViewMode.PAIRS
+            self.pair_finder.tickers = self.layout.tickers
+            self.pair_finder.watchlist_coins = list(
+                self.config["watchlist"].get("coins", [])
+            )
+            asyncio.create_task(self._fetch_and_render_pairs())
+
     async def _handle_settings_key(self, key: str) -> None:
         result = self.settings_view.handle_key(key)
         if result == "exit":
             # Apply config changes back to the running app
             self.config = self.settings_view.config
+            onchain_cfg = self.config.get("onchain", {})
+            self.etherscan.api_key = onchain_cfg.get("etherscan_api_key") or self.config.get("api_keys", {}).get("etherscan", "")
+            thresh = float(onchain_cfg.get("whale_threshold_usd", self.onchain_view.whale_threshold_usd))
+            self.onchain_view.whale_threshold_usd = thresh
+            self.whale_alert.threshold_usd = thresh
             self.view_mode = self._previous_view
         self._request_render()
 
@@ -634,6 +784,9 @@ class CryptoScopeApp:
                     await self.lunarcrush.close()
                     await self.binance.close()
                     await self.reddit.close()
+                    await self.blockchain_com.close()
+                    await self.etherscan.close()
+                    await self.whale_alert.close()
                     await self.db.close()
         finally:
             self._input.stop()

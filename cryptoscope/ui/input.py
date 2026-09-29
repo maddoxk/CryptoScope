@@ -20,7 +20,10 @@ class TerminalInput:
     """
 
     def __init__(self) -> None:
-        self._fd = sys.stdin.fileno()
+        try:
+            self._fd = sys.stdin.fileno()
+        except Exception:
+            self._fd = -1
         self._old_settings: list | None = None
 
     def start(self) -> None:
@@ -29,13 +32,21 @@ class TerminalInput:
         cbreak (not raw) lets Rich's escape sequences pass through while
         still delivering individual keypresses without waiting for Enter.
         """
-        self._old_settings = termios.tcgetattr(self._fd)
-        tty.setcbreak(self._fd)
+        if self._fd < 0:
+            return
+        try:
+            self._old_settings = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+        except Exception:
+            pass
 
     def stop(self) -> None:
         """Restore original terminal settings."""
-        if self._old_settings is not None:
-            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
+        if self._fd >= 0 and self._old_settings is not None:
+            try:
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_settings)
+            except Exception:
+                pass
             self._old_settings = None
 
     async def read_key(self) -> str:

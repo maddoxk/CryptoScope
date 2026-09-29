@@ -119,6 +119,16 @@ CATEGORIES: list[tuple[str, list[SettingDef]]] = [
             ),
         ],
     ),
+    (
+        "On-Chain",
+        [
+            SettingDef("etherscan_api_key", "Etherscan Key", SettingType.TEXT, "onchain", masked=True),
+            SettingDef(
+                "whale_threshold_usd", "Whale Min ($)", SettingType.NUMBER, "onchain",
+                min_val=100_000, max_val=100_000_000,
+            ),
+        ],
+    ),
 ]
 
 
